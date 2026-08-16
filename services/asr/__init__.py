@@ -1,0 +1,2 @@
+"""ASR and embedding worker."""
+

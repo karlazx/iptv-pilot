@@ -1,0 +1,2 @@
+"""FastAPI web service."""
+

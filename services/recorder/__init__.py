@@ -1,0 +1,2 @@
+"""FFmpeg recording worker."""
+
