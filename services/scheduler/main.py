@@ -59,7 +59,7 @@ def schedule_once(database) -> None:
     programmes = list(
         database.epg_programs.find({"start_time": {"$gte": now, "$lte": horizon}})
     )
-    enabled_channels = set(database.channels.distinct("channel_id", {"enabled": True, "m3u_url": {"$exists": True}}))
+    enabled_channels = set(database.channels.distinct("channel_id", {"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}))
     programmes = [row for row in programmes if row.get("channel_id") in enabled_channels]
     pre_roll = int(os.getenv("RECORDING_PRE_ROLL_SECONDS", "60"))
     default_post_roll = int(os.getenv("RECORDING_POST_ROLL_SECONDS", "180"))

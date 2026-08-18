@@ -163,6 +163,25 @@ class StreamSelection(BaseModel):
     index: int | None = None
 
 
+class ChannelAdminUpdate(BaseModel):
+    name_override: str | None = Field(default=None, max_length=100)
+    category_override: str | None = Field(default=None, max_length=40)
+    sort_weight: int | None = Field(default=None, ge=-100000, le=100000)
+    disabled: bool | None = None
+
+    @model_validator(mode="after")
+    def at_least_one(self):
+        fields = self.model_fields_set
+        if not any(key in fields for key in ("name_override", "category_override", "sort_weight", "disabled")):
+            raise ValueError("no channel admin fields provided")
+        return self
+
+
+class ChannelBatchUpdate(BaseModel):
+    channel_ids: list[str] = Field(min_length=1, max_length=200)
+    disabled: bool
+
+
 def serialize(value: Any) -> Any:
     if isinstance(value, ObjectId):
         return str(value)
@@ -203,29 +222,128 @@ def health() -> dict:
     return {"status": "ok", "time": datetime.now(UTC).isoformat()}
 
 
+_CHANNEL_CATEGORY_ORDER = ["央视频道", "卫视频道", "国际频道", "地方与其他"]
+
+
+def _default_category(channel: dict) -> str:
+    """Derive a channel's default category from its M3U group-title or name."""
+    group = (channel.get("raw_m3u") or {}).get("group-title") or ""
+    cleaned = re.sub(r"^[^\w一-鿿]+", "", group.strip())
+    name = f"{channel.get('name', '')} {channel.get('channel_id', '')}".lower()
+    if "央视" in cleaned or re.match(r"^(cctv|cgtn)", channel.get("channel_id", ""), re.I):
+        return "央视频道"
+    if "国际" in cleaned or re.search(r"nhk|bbc|cna|al jazeera|france 24|arirang|cgtn", name):
+        return "国际频道"
+    if "卫视" in cleaned or "卫视" in name:
+        return "卫视频道"
+    return "地方与其他"
+
+
+def channel_display(channel: dict) -> dict:
+    """Apply user overrides (name/category) and expose derived category for the frontend."""
+    result = dict(channel)
+    result["name"] = channel.get("name_override") or channel.get("name") or channel.get("channel_id")
+    result["category"] = channel.get("category_override") or _default_category(channel)
+    return result
+
+
 @app.get("/api/channels")
 def channels(category: str | None = None, include_disabled: bool = False) -> list[dict]:
     query: dict[str, Any] = {}
-    if category:
-        query["category"] = category
     if not include_disabled:
-        query.update({"enabled": True, "m3u_url": {"$exists": True}})
-    return serialize(
-        list(
-            database.channels.find(
-                query, {"raw_m3u": 0, "stream_candidates": 0, "stream_quality": 0}
-            ).sort("name", 1)
+        query.update({"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}})
+    rows = [
+        channel_display(row)
+        for row in database.channels.find(
+            query, {"raw_m3u": 0, "stream_candidates": 0, "stream_quality": 0}
         )
-    )
+    ]
+    if category:
+        rows = [row for row in rows if row.get("category") == category]
+    rows.sort(key=lambda row: (row.get("sort_weight") is None, -(row.get("sort_weight") or 0), row.get("name", "")))
+    return serialize(rows)
 
 
 def enabled_channel(channel_id: str) -> dict:
     channel = database.channels.find_one(
-        {"channel_id": channel_id, "enabled": True, "m3u_url": {"$exists": True}}
+        {"channel_id": channel_id, "enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}
     )
     if not channel:
         raise HTTPException(status_code=404, detail="channel is not available for live viewing")
     return channel
+
+
+@app.get("/api/channels/admin")
+def channels_admin() -> list[dict]:
+    """Full channel list for the management page, including disabled and stream-less rows."""
+    rows = [
+        channel_display(row)
+        for row in database.channels.find({}, {"stream_quality": 0}).sort("name", 1)
+    ]
+    for row in rows:
+        row["stream_count"] = len(row.get("stream_candidates") or [])
+        row["epg_matched"] = row.get("epg_source") == "xmltv"
+        row.pop("stream_candidates", None)
+        row.pop("raw_m3u", None)
+    return serialize(rows)
+
+
+@app.patch("/api/channels/{channel_id}")
+def update_channel_admin(channel_id: str, payload: ChannelAdminUpdate) -> dict:
+    current = database.channels.find_one({"channel_id": channel_id})
+    if not current:
+        raise HTTPException(status_code=404, detail="channel not found")
+    update: dict[str, Any] = {}
+    for key in ("name_override", "category_override", "sort_weight", "disabled"):
+        if key in payload.model_fields_set:
+            value = getattr(payload, key)
+            if value is None:
+                update["$unset"] = {**(update.get("$unset") or {}), key: ""}
+            else:
+                update.setdefault("$set", {})[key] = value
+    update.setdefault("$set", {})["updated_at"] = datetime.now(UTC)
+    database.channels.update_one({"channel_id": channel_id}, update)
+    row = database.channels.find_one({"channel_id": channel_id})
+    display = channel_display(row)
+    display["stream_count"] = len(row.get("stream_candidates") or [])
+    return serialize(display)
+
+
+@app.post("/api/channels/batch")
+def batch_channel_admin(payload: ChannelBatchUpdate) -> dict:
+    result = database.channels.update_many(
+        {"channel_id": {"$in": payload.channel_ids}},
+        {"$set": {"disabled": payload.disabled, "updated_at": datetime.now(UTC)}},
+    )
+    return {"matched": result.matched_count, "modified": result.modified_count}
+
+
+@app.get("/api/channels/{channel_id}/detail")
+def channel_detail(channel_id: str) -> dict:
+    """Channel detail drawer: stream list, recent recordings, EPG match status."""
+    channel = database.channels.find_one(
+        {"channel_id": channel_id},
+        {"raw_m3u": 1, "stream_candidates": 1, "stream_quality": 1, "stream_manual": 1},
+    )
+    if not channel:
+        raise HTTPException(status_code=404, detail="channel not found")
+    recordings = list(
+        database.recordings.find(
+            {"channel_id": channel_id}, {"file_path": 1, "start_time": 1, "status": 1, "program_title": 1, "duration_sec": 1}
+        ).sort("start_time", -1).limit(10)
+    )
+    epg_count = database.epg_programs.count_documents({"channel_id": channel_id})
+    return serialize(
+        {
+            "channel": channel_display(channel),
+            "streams": channel_stream_options(channel_id),
+            "recent_recordings": recordings,
+            "epg": {
+                "matched": channel.get("epg_source") == "xmltv",
+                "program_count": epg_count,
+            },
+        }
+    )
 
 
 def channel_stream_options(channel_id: str) -> dict:
@@ -499,7 +617,7 @@ def search(q: str = Query(min_length=1), vector: bool = False) -> dict:
 
 def ensure_enabled_channel(channel_id: str) -> None:
     if not database.channels.find_one(
-        {"channel_id": channel_id, "enabled": True, "m3u_url": {"$exists": True}}
+        {"channel_id": channel_id, "enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}
     ):
         raise HTTPException(status_code=422, detail="channel_id is not an enabled stream")
 
@@ -669,7 +787,7 @@ def push_events(limit: int = Query(100, ge=1, le=500)) -> list[dict]:
 @app.get("/api/system/status")
 def system_status() -> dict:
     return {
-        "channels": database.channels.count_documents({"enabled": True, "m3u_url": {"$exists": True}}),
+        "channels": database.channels.count_documents({"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}),
         "epg_programs": database.epg_programs.count_documents({}),
         "subscriptions": database.subscriptions.count_documents({"enabled": True}),
         "recordings_by_status": {

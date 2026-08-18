@@ -177,7 +177,7 @@ def capture_stream(source_url: str, output_path: Path, scheduled_end: datetime) 
 
 
 def process_recording(database, recording: dict) -> None:
-    channel = database.channels.find_one({"channel_id": recording["channel_id"], "enabled": True})
+    channel = database.channels.find_one({"channel_id": recording["channel_id"], "enabled": True, "disabled": {"$ne": True}})
     if not channel or not channel.get("m3u_url"):
         raise RuntimeError(f"no enabled stream URL for channel {recording['channel_id']}")
     now = datetime.now(UTC)

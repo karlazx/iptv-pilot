@@ -14,6 +14,7 @@ const appState = {
 
 const routeMeta = {
   epg: ["节目单", "CHANNELS & EPG"],
+  channels: ["频道管理", "CHANNEL ADMIN"],
   subscriptions: ["我的订阅", "SUBSCRIPTIONS"],
   recordings: ["录制与处理", "RECORDINGS"],
   summaries: ["节目摘要", "AI SUMMARIES"],
@@ -86,6 +87,7 @@ function badge(status) {
 }
 
 function channelCategory(channel) {
+  if (channel.category) return channel.category;
   const name = `${channel.name || ""} ${channel.channel_id || ""}`.toLowerCase();
   if (/^(cctv|cgtn)/i.test(channel.channel_id || "")) return "央视频道";
   if (/(nhk|bbc|cna|al jazeera|france 24|arirang|cgtn)/i.test(name)) return "国际频道";
@@ -249,6 +251,7 @@ async function renderEpg() {
     const key = channelCategory(item); (all[key] ||= []).push(item); return all;
   }, {});
   const orderedGroups = ["央视频道", "卫视频道", "国际频道", "地方与其他"]
+    .concat(Object.keys(groups).filter(group => !["央视频道", "卫视频道", "国际频道", "地方与其他"].includes(group)))
     .filter(group => groups[group])
     .map(group => [group, groups[group]]);
   $("#view").innerHTML = `
@@ -814,6 +817,110 @@ async function renderBookmarks() {
   });
 }
 
+async function renderChannelsAdmin() {
+  const channels = await api("/api/channels/admin");
+  const categories = ["央视频道", "卫视频道", "国际频道", "地方与其他"];
+  $("#view").innerHTML = `
+    ${pageIntro("管理频道名称、分类、排序与启用状态。改名/改分类写入 override 字段，不会被次日 EPG 同步覆盖。", '<button class="button" id="admin-batch-enable" type="button">批量启用</button> <button class="button secondary" id="admin-batch-disable" type="button">批量禁用</button>')}
+    <div class="toolbar"><label class="field"><span>分类筛选</span><select class="select" id="admin-category-filter"><option value="">全部分类</option>${categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label><div class="grow"></div><span class="badge" id="admin-count">${channels.length} 个频道</span></div>
+    <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" id="admin-check-all" aria-label="全选"></th><th>名称</th><th>分类</th><th>线路</th><th>排序权重</th><th>状态</th><th></th></tr></thead><tbody id="admin-body"></tbody></table></div></section>`;
+  const renderRows = () => {
+    const filter = $("#admin-category-filter").value;
+    const rows = channels.filter(row => !filter || row.category === filter);
+    $("#admin-count").textContent = `${rows.length} 个频道`;
+    $("#admin-body").innerHTML = rows.length ? rows.map(row => {
+      const disabled = row.disabled === true;
+      return `<tr>
+        <td><input type="checkbox" class="admin-check" data-channel-id="${esc(row.channel_id)}"></td>
+        <td><strong>${esc(row.name)}</strong><small>${esc(row.channel_id)}${row.name_override ? " · 已改名" : ""}${row.category_override ? " · 已改分类" : ""}</small></td>
+        <td>${esc(row.category)}</td>
+        <td>${row.stream_count || 0}</td>
+        <td>${row.sort_weight ?? "—"}</td>
+        <td>${disabled ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</td>
+        <td><div class="table-actions"><button class="button small secondary" data-admin-edit="${esc(row.channel_id)}">编辑</button><button class="button small ghost" data-admin-detail="${esc(row.channel_id)}">详情</button><button class="button small ${disabled ? "secondary" : "danger"}" data-admin-toggle="${esc(row.channel_id)}">${disabled ? "启用" : "禁用"}</button></div></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="7">${emptyState("没有频道", "当前筛选条件下没有频道。", true)}</td></tr>`;
+  };
+  renderRows();
+  $("#admin-category-filter").addEventListener("change", renderRows);
+  $("#admin-check-all").addEventListener("change", event => {
+    $$(".admin-check").forEach(check => { check.checked = event.target.checked; });
+  });
+  const batch = async disabled => {
+    const ids = $$(".admin-check:checked").map(check => check.dataset.channelId);
+    if (!ids.length) return toast("请先勾选频道", "error");
+    try {
+      await api("/api/channels/batch", { method: "POST", body: { channel_ids: ids, disabled } });
+      toast(disabled ? "已批量禁用" : "已批量启用");
+      appState.channels = null;
+      renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  };
+  $("#admin-batch-enable").addEventListener("click", () => batch(false));
+  $("#admin-batch-disable").addEventListener("click", () => batch(true));
+  $("#admin-body").addEventListener("click", async event => {
+    const edit = event.target.closest("[data-admin-edit]");
+    const detail = event.target.closest("[data-admin-detail]");
+    const toggle = event.target.closest("[data-admin-toggle]");
+    if (edit) return openChannelAdminForm(channels.find(row => row.channel_id === edit.dataset.adminEdit));
+    if (detail) return openChannelDetail(detail.dataset.adminDetail);
+    if (toggle) {
+      const row = channels.find(item => item.channel_id === toggle.dataset.adminToggle);
+      try {
+        await api(`/api/channels/${encodeURIComponent(row.channel_id)}`, { method: "PATCH", body: { disabled: row.disabled !== true } });
+        toast(row.disabled ? "频道已启用" : "频道已禁用");
+        appState.channels = null;
+        renderRoute();
+      } catch (error) { toast(error.message, "error"); }
+    }
+  });
+}
+
+function openChannelAdminForm(channel) {
+  openModal(`编辑频道 · ${esc(channel.channel_id)}`, `<form id="channel-admin-form" class="form-grid">
+    <label class="field wide"><span>显示名称</span><input class="input" name="name_override" maxlength="100" value="${esc(channel.name_override || "")}" placeholder="${esc(channel.name)}（留空则用原始名称）"></label>
+    <label class="field"><span>分类</span><select class="select" name="category_override"><option value="">（默认：${esc(channel.category)}）</option>${["央视频道","卫视频道","国际频道","地方与其他"].map(c => `<option value="${esc(c)}" ${channel.category_override === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
+    <label class="field"><span>排序权重</span><input class="input" name="sort_weight" type="number" value="${channel.sort_weight ?? ""}" placeholder="留空=默认按名称，数字大排前"></label>
+    <div class="field"><span>当前状态</span><p class="meta-row">${channel.disabled === true ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</p></div>
+    <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">保存</button></div>
+  </form>`);
+  $("#channel-admin-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const body = {};
+    const nameOverride = data.get("name_override").trim();
+    const categoryOverride = data.get("category_override");
+    const sortWeight = data.get("sort_weight").trim();
+    body.name_override = nameOverride || null;
+    body.category_override = categoryOverride || null;
+    body.sort_weight = sortWeight === "" ? null : Number(sortWeight);
+    try {
+      await api(`/api/channels/${encodeURIComponent(channel.channel_id)}`, { method: "PATCH", body });
+      toast("频道已更新"); closeModal(); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  });
+}
+
+async function openChannelDetail(channelId) {
+  openModal("频道详情", '<div class="page-loading"><span class="spinner"></span></div>', true);
+  try {
+    const detail = await api(`/api/channels/${encodeURIComponent(channelId)}/detail`);
+    const row = detail.channel;
+    $("#modal-title").textContent = `${row.name} · ${channelId}`;
+    const streams = detail.streams?.candidates || [];
+    $("#modal-body").innerHTML = `<div class="detail-stack">
+      <dl class="definition-grid">
+        <div><dt>频道</dt><dd>${esc(row.name)}</dd></div>
+        <div><dt>分类</dt><dd>${esc(row.category)}</dd></div>
+        <div><dt>EPG 匹配</dt><dd>${detail.epg?.matched ? `<span class="badge success">已匹配 · ${detail.epg.program_count} 条节目</span>` : '<span class="badge">未匹配</span>'}</dd></div>
+        <div><dt>线路数</dt><dd>${streams.length} 条</dd></div>
+      </dl>
+      <section class="detail-section"><h3>直播线路</h3>${streams.length ? `<table class="data-table"><thead><tr><th>#</th><th>线路域名</th><th>状态</th></tr></thead><tbody>${streams.map((s, i) => `<tr><td>${i}</td><td>${esc(s.host)}</td><td>${s.current ? '<span class="badge success">当前使用</span>' : '<span class="badge">候选</span>'}${streamQualityLabel(s.quality)}</td></tr>`).join("")}</tbody></table>` : "<p>暂无线路</p>"}</section>
+      <section class="detail-section"><h3>近 10 条录制</h3>${detail.recent_recordings?.length ? detail.recent_recordings.map(r => `<p class="meta-row"><span class="badge ${r.status === "completed" || r.status === "summarized" ? "success" : ""}">${esc(r.status)}</span><span>${esc(r.program_title || "—")}</span><span>${esc(formatDateTime(r.start_time))}</span></p>`).join("") : "<p>暂无录制</p>"}</section>
+    </div>`;
+  } catch (error) { $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
+}
+
 async function renderSystem() {
   const [status, events, health] = await Promise.all([api("/api/system/status"), api("/api/push/events?limit=100"), api("/health")]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
@@ -838,7 +945,7 @@ async function renderRoute() {
   $("#page-eyebrow").textContent = eyebrow;
   $$(`[data-route]`).forEach(link => link.classList.toggle("active", link.dataset.route === current));
   loading();
-  const renderers = { epg: renderEpg, subscriptions: renderSubscriptions, recordings: renderRecordings, summaries: renderSummaries, bookmarks: renderBookmarks, system: renderSystem };
+  const renderers = { epg: renderEpg, channels: renderChannelsAdmin, subscriptions: renderSubscriptions, recordings: renderRecordings, summaries: renderSummaries, bookmarks: renderBookmarks, system: renderSystem };
   try {
     await renderers[current]();
     if (token === appState.renderToken) $("#view").focus({ preventScroll: true });
