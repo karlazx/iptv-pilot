@@ -24,7 +24,7 @@ def safe_name(value: str) -> str:
 def claim_recording(database):
     now = datetime.now(UTC)
     stale_before = now - timedelta(seconds=int(os.getenv("RECORDING_STALE_SECONDS", "600")))
-    return database.recordings.find_one_and_update(
+    recording = database.recordings.find_one_and_update(
         {
             "scheduled_start": {"$lte": now},
             "$and": [
@@ -49,6 +49,25 @@ def claim_recording(database):
         sort=[("scheduled_start", 1)],
         return_document=ReturnDocument.AFTER,
     )
+    if recording:
+        _mark_partial_if_late(database, recording, now)
+    return recording
+
+
+def _mark_partial_if_late(database, recording: dict, now: datetime) -> None:
+    scheduled_start = recording.get("scheduled_start")
+    if not scheduled_start:
+        return
+    missed = int((now - scheduled_start).total_seconds())
+    if missed <= 120:
+        return
+    database.recordings.update_one(
+        {"_id": recording["_id"]},
+        {"$set": {"partial": True, "missed_seconds": max(0, missed)}},
+    )
+    recording["partial"] = True
+    recording["missed_seconds"] = max(0, missed)
+    logger.warning("recording claimed late id=%s missed_seconds=%s", recording["_id"], missed)
 
 
 def _ffmpeg_executable() -> str:
@@ -58,6 +77,47 @@ def _ffmpeg_executable() -> str:
     import imageio_ffmpeg
 
     return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def probe_media_duration(path: Path) -> float | None:
+    """Return the real media duration in seconds, or None when it cannot be probed."""
+    try:
+        import av
+
+        container = av.open(str(path))
+        try:
+            if container.duration:
+                return container.duration / 1_000_000
+        finally:
+            container.close()
+    except Exception:
+        logger.warning("media duration probe failed path=%s", path, exc_info=True)
+    return None
+
+
+def _epg_deviation_suspect(recording: dict, output_path: Path) -> bool:
+    """Mark recordings whose real duration deviates >20% from the EPG-expected length."""
+    end_time = recording.get("end_time")
+    start_time = recording.get("start_time")
+    if not end_time or not start_time:
+        return False
+    expected = (end_time - start_time).total_seconds()
+    if expected <= 0:
+        return False
+    actual = probe_media_duration(output_path)
+    if actual is None:
+        return False
+    deviation = abs(actual - expected) / expected
+    if deviation > 0.2:
+        logger.warning(
+            "EPG time suspect id=%s expected=%.1fs actual=%.1fs deviation=%.1f%%",
+            recording["_id"],
+            expected,
+            actual,
+            deviation * 100,
+        )
+        return True
+    return False
 
 
 def _capture_with_ffmpeg(source_url: str, output_path: Path, duration: int) -> None:
@@ -155,6 +215,7 @@ def process_recording(database, recording: dict) -> None:
                 "completed_at": datetime.now(UTC),
                 "next_attempt_at": None,
                 "error": None,
+                "epg_time_suspect": _epg_deviation_suspect(recording, output_path),
             }
         },
     )

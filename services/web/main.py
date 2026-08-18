@@ -115,6 +115,7 @@ class SubscriptionCreate(BaseModel):
     llm_enabled: bool = True
     push_enabled: bool = True
     auto_bookmark: bool = False
+    post_roll_seconds: int = Field(default=180, ge=60, le=600)
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -137,6 +138,7 @@ class SubscriptionUpdate(BaseModel):
     llm_enabled: bool | None = None
     push_enabled: bool | None = None
     auto_bookmark: bool | None = None
+    post_roll_seconds: int | None = Field(default=None, ge=60, le=600)
     enabled: bool | None = None
 
 

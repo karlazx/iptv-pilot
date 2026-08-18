@@ -386,7 +386,7 @@ async function renderSubscriptions() {
 
 async function openSubscriptionForm(existing = null, preset = {}) {
   const channels = await loadChannels();
-  const value = { asr_enabled: true, asr_model: "small", llm_enabled: true, push_enabled: true, auto_bookmark: false, enabled: true, ...preset, ...(existing || {}) };
+  const value = { asr_enabled: true, asr_model: "small", llm_enabled: true, push_enabled: true, auto_bookmark: false, post_roll_seconds: 180, enabled: true, ...preset, ...(existing || {}) };
   const type = value.match_type || "keyword";
   const weekdays = value.time_rule?.weekdays
     || (value.time_rule?.weekday === undefined || value.time_rule?.weekday === null ? [] : [value.time_rule.weekday]);
@@ -404,6 +404,7 @@ async function openSubscriptionForm(existing = null, preset = {}) {
         </div>
       </div>
       <label class="field"><span>ASR 模型</span><select class="select" name="asr_model">${["tiny","base","small","medium"].map(model => `<option ${value.asr_model === model ? "selected" : ""}>${model}</option>`).join("")}</select></label>
+      <label class="field"><span>录制缓冲（片尾）</span><select class="select" name="post_roll_seconds">${[["60","1 分钟"],["180","3 分钟（默认）"],["300","5 分钟"],["600","10 分钟"]].map(([sec, label]) => `<option value="${sec}" ${Number(value.post_roll_seconds || 180) === Number(sec) ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <div class="field"><span>自动处理</span><div class="checks"><label class="check"><input type="checkbox" name="asr_enabled" ${value.asr_enabled ? "checked" : ""}>转写</label><label class="check"><input type="checkbox" name="llm_enabled" ${value.llm_enabled ? "checked" : ""}>摘要</label><label class="check"><input type="checkbox" name="push_enabled" ${value.push_enabled ? "checked" : ""}>邮件</label><label class="check"><input type="checkbox" name="auto_bookmark" ${value.auto_bookmark ? "checked" : ""}>自动收藏摘要</label></div></div>
       <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">${existing ? "保存修改" : "创建订阅"}</button></div>
     </form>`);
@@ -430,7 +431,8 @@ async function openSubscriptionForm(existing = null, preset = {}) {
       } : null,
       asr_enabled: data.has("asr_enabled"), asr_model: data.get("asr_model"),
       llm_enabled: data.has("llm_enabled"), push_enabled: data.has("push_enabled"),
-      auto_bookmark: data.has("auto_bookmark"), enabled: existing ? Boolean(existing.enabled) : true,
+      auto_bookmark: data.has("auto_bookmark"), post_roll_seconds: Number(data.get("post_roll_seconds")),
+      enabled: existing ? Boolean(existing.enabled) : true,
     };
     if (matchType === "channel_time" && !body.time_rule.weekdays.length) return toast("频道时间订阅至少选择一个星期", "error");
     try {
@@ -453,7 +455,8 @@ async function renderRecordings() {
     $("#recording-body").innerHTML = rows.length ? rows.map(row => {
       const saved = Boolean(bookmarkFor("recording", row._id));
       const playable = Boolean(row.file_path) && !["queued","recording","failed"].includes(row.status);
-      return `<tr><td><strong>${esc(row.program_title)}</strong><small>${esc(row.channel_id)}${row.manual ? " · 手工" : ""}</small></td><td>${esc(formatDateTime(row.start_time))}</td><td>${badge(row.status)}</td><td>${esc(formatBytes(row.size_bytes))}</td><td><div class="table-actions"><button class="button small ghost" data-watch-channel="${esc(row.channel_id)}">直播</button><button class="button small secondary" data-recording-detail="${esc(row._id)}">详情</button>${playable ? `<button class="button small secondary" data-play="${esc(row._id)}" data-title="${esc(row.program_title)}">播放</button>` : ""}<button class="button small ghost" data-bookmark-recording="${esc(row._id)}">${saved ? "♥" : "♡"}</button></div></td></tr>`;
+      const incomplete = row.partial ? `<span class="badge danger" title="本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒">不完整</span> ` : "";
+      return `<tr><td><strong>${esc(row.program_title)}</strong><small>${esc(row.channel_id)}${row.manual ? " · 手工" : ""}${row.epg_time_suspect ? " · EPG时间存疑" : ""}</small></td><td>${esc(formatDateTime(row.start_time))}</td><td>${incomplete}${badge(row.status)}</td><td>${esc(formatBytes(row.size_bytes))}</td><td><div class="table-actions"><button class="button small ghost" data-watch-channel="${esc(row.channel_id)}">直播</button><button class="button small secondary" data-recording-detail="${esc(row._id)}">详情</button>${playable ? `<button class="button small secondary" data-play="${esc(row._id)}" data-title="${esc(row.program_title)}">播放</button>` : ""}<button class="button small ghost" data-bookmark-recording="${esc(row._id)}">${saved ? "♥" : "♡"}</button></div></td></tr>`;
     }).join("") : `<tr><td colspan="5">${emptyState("暂无记录", "当前筛选条件下没有录制。", true)}</td></tr>`;
   };
   renderRows();
@@ -513,6 +516,8 @@ async function openRecordingDetail(recordingId) {
     const row = detail.recording;
     $("#modal-title").textContent = row.program_title || "录制详情";
     $("#modal-body").innerHTML = `<div class="detail-stack">
+      ${row.partial ? `<div class="notice warning">本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒。</div>` : ""}
+      ${row.epg_time_suspect ? `<div class="notice warning">EPG 时间可能不准，建议加大录制缓冲。</div>` : ""}
       <dl class="definition-grid"><div><dt>频道</dt><dd>${esc(row.channel_id)}</dd></div><div><dt>状态</dt><dd>${badge(row.status)}</dd></div><div><dt>开始时间</dt><dd>${esc(formatDateTime(row.start_time))}</dd></div><div><dt>时长 / 大小</dt><dd>${esc(row.duration_sec || "—")} 秒 · ${esc(formatBytes(row.size_bytes))}</dd></div></dl>
       <div class="button-row">${row.file_path ? `<button class="button" data-detail-play type="button">▶ 播放</button><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原文件</a>` : ""}</div>
       ${summarySections(detail.summary, detail.transcript)}

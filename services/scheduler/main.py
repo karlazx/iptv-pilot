@@ -62,9 +62,10 @@ def schedule_once(database) -> None:
     enabled_channels = set(database.channels.distinct("channel_id", {"enabled": True, "m3u_url": {"$exists": True}}))
     programmes = [row for row in programmes if row.get("channel_id") in enabled_channels]
     pre_roll = int(os.getenv("RECORDING_PRE_ROLL_SECONDS", "60"))
-    post_roll = int(os.getenv("RECORDING_POST_ROLL_SECONDS", "180"))
+    default_post_roll = int(os.getenv("RECORDING_POST_ROLL_SECONDS", "180"))
     operations: list[UpdateOne] = []
     for subscription in subscriptions:
+        post_roll = int(subscription.get("post_roll_seconds") or default_post_roll)
         for programme in programmes:
             if not matches(subscription, programme, os.getenv("TZ", "Asia/Shanghai")):
                 continue
