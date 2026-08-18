@@ -15,6 +15,7 @@ const appState = {
 const routeMeta = {
   epg: ["节目单", "CHANNELS & EPG"],
   channels: ["频道管理", "CHANNEL ADMIN"],
+  sources: ["直播源", "STREAM SOURCES"],
   subscriptions: ["我的订阅", "SUBSCRIPTIONS"],
   recordings: ["录制与处理", "RECORDINGS"],
   summaries: ["节目摘要", "AI SUMMARIES"],
@@ -921,6 +922,97 @@ async function openChannelDetail(channelId) {
   } catch (error) { $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
 }
 
+async function renderSources() {
+  const [data, channels] = await Promise.all([api("/api/sources"), loadChannels()]);
+  const summary = data.m3u_summary || {};
+  $("#view").innerHTML = `
+    ${pageIntro("管理直播线路。内置源来自 iptv-api 每日同步，自定义源独立存储不会被同步覆盖。", '<button class="button" id="source-new" type="button">＋ 新增自定义源</button>')}
+    <div class="toolbar">
+      <label class="field"><span>频道筛选</span><select class="select" id="source-channel-filter"><option value="">全部频道</option>${channels.map(c => `<option value="${esc(c.channel_id)}">${esc(c.name || c.channel_id)}</option>`).join("")}</select></label>
+      <label class="field"><span>来源类型</span><select class="select" id="source-type-filter"><option value="">全部</option><option value="seed">内置</option><option value="custom">自定义</option></select></label>
+      <div class="grow"></div><span class="badge" id="source-count">${data.sources.length} 条线路</span>
+    </div>
+    <div class="meta-row" style="margin:0 0 12px"><span>M3U 总源：${esc(summary.source || "—")} · 最后同步 ${esc(formatDateTime(summary.last_sync_at))} · 内置线路 ${summary.seed_stream_count ?? 0} 条</span></div>
+    <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>频道</th><th>线路地址</th><th>来源</th><th>备注</th><th>状态</th><th></th></tr></thead><tbody id="source-body"></tbody></table></div></section>`;
+  const renderRows = () => {
+    const channelFilter = $("#source-channel-filter").value;
+    const typeFilter = $("#source-type-filter").value;
+    const rows = data.sources.filter(row => (!channelFilter || row.channel_id === channelFilter) && (!typeFilter || row.source_type === typeFilter));
+    $("#source-count").textContent = `${rows.length} 条线路`;
+    $("#source-body").innerHTML = rows.length ? rows.map(row => {
+      const custom = row.source_type === "custom";
+      const host = (() => { try { return new URL(row.url).host; } catch { return row.url; } })();
+      return `<tr>
+        <td><strong>${esc(row.channel_name)}</strong><small>${esc(row.channel_id)}</small></td>
+        <td><span title="${esc(row.url)}">${esc(host)}</span>${row.current ? ' <span class="badge success">当前</span>' : ""}</td>
+        <td>${custom ? '<span class="badge warning">自定义</span>' : '<span class="badge info">内置</span>'}</td>
+        <td>${esc(row.note || "—")}</td>
+        <td>${row.enabled === false ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</td>
+        <td><div class="table-actions"><button class="button small ghost" data-source-test="${esc(row.url)}" data-source-name="${esc(row.channel_id)}">测试</button>${custom ? `<button class="button small secondary" data-source-edit="${esc(row._id)}">编辑</button><button class="button small danger" data-source-delete="${esc(row._id)}">删除</button>` : ""}</div></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6">${emptyState("暂无线路", "当前筛选条件下没有线路。", true)}</td></tr>`;
+  };
+  renderRows();
+  $("#source-channel-filter").addEventListener("change", renderRows);
+  $("#source-type-filter").addEventListener("change", renderRows);
+  $("#source-new").addEventListener("click", () => openSourceForm(channels));
+  $("#source-body").addEventListener("click", async event => {
+    const test = event.target.closest("[data-source-test]");
+    const edit = event.target.closest("[data-source-edit]");
+    const del = event.target.closest("[data-source-delete]");
+    if (test) return testSourceUrl(test.dataset.sourceTest, test.dataset.sourceName);
+    if (edit) return openSourceForm(channels, data.sources.find(row => row._id === edit.dataset.sourceEdit));
+    if (del) {
+      const row = data.sources.find(item => item._id === del.dataset.sourceDelete);
+      if (!confirm(`确定删除自定义源「${row?.channel_id} · ${row?.url}」？`)) return;
+      try {
+        await api(`/api/sources/${encodeURIComponent(row._id)}`, { method: "DELETE" });
+        toast("自定义源已删除"); renderRoute();
+      } catch (error) { toast(error.message, "error"); }
+    }
+  });
+}
+
+function openSourceForm(channels, existing = null) {
+  openModal(existing ? "编辑自定义源" : "新增自定义源", `<form id="source-form" class="form-grid">
+    <label class="field wide"><span>频道</span><select class="select" name="channel_id" ${existing ? "disabled" : "required"}>${channelOptions(channels, existing?.channel_id || "", false)}</select>${existing ? '<small>自定义源归属频道不可修改</small>' : ""}</label>
+    <label class="field wide"><span>线路 URL</span><input class="input" name="url" required value="${esc(existing?.url || "")}" placeholder="http://... 或 https://..."></label>
+    <label class="field wide"><span>备注</span><input class="input" name="note" maxlength="200" value="${esc(existing?.note || "")}" placeholder="可选，例如：备用线路、1080p"></label>
+    <label class="field"><span>状态</span><select class="select" name="enabled"><option value="true" ${existing?.enabled !== false ? "selected" : ""}>启用</option><option value="false" ${existing?.enabled === false ? "selected" : ""}>禁用</option></select></label>
+    <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">${existing ? "保存" : "添加"}</button></div>
+  </form>`);
+  $("#source-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const body = { url: data.get("url").trim(), note: data.get("note").trim(), enabled: data.get("enabled") === "true" };
+    if (!existing) body.channel_id = data.get("channel_id");
+    try {
+      await api(existing ? `/api/sources/${encodeURIComponent(existing._id)}` : "/api/sources", { method: existing ? "PATCH" : "POST", body });
+      toast(existing ? "自定义源已更新" : "自定义源已添加"); closeModal(); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  });
+}
+
+async function testSourceUrl(url, channelId) {
+  openModal("线路测试", '<div class="page-loading"><span class="spinner"></span><p>正在探测线路…</p></div>', true);
+  $("#modal-title").textContent = `测试 · ${channelId}`;
+  try {
+    const result = await api("/api/sources/test", { method: "POST", body: { url } });
+    const seg = result.first_segment;
+    $("#modal-body").innerHTML = `<div class="detail-stack">
+      <dl class="definition-grid">
+        <div><dt>结果</dt><dd>${result.ok ? '<span class="badge success">可用</span>' : '<span class="badge danger">不可用</span>'}</dd></div>
+        <div><dt>HTTP 状态</dt><dd>${esc(result.status ?? "—")}</dd></div>
+        <div><dt>耗时</dt><dd>${esc(result.elapsed_ms)} ms</dd></div>
+        <div><dt>首分片</dt><dd>${seg ? `${esc(seg.status)} · ${esc(seg.size_bytes)} B · ${esc(seg.elapsed_ms)} ms` : (seg?.error ? `失败：${esc(seg.error)}` : "无")}</dd></div>
+      </dl>
+      ${result.error ? `<div class="notice warning">${esc(result.error)}</div>` : ""}
+      <div class="button-row"><button class="button secondary" data-close-modal type="button">关闭</button></div>
+    </div>`;
+    $("[data-close-modal]")?.addEventListener("click", closeModal);
+  } catch (error) { $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
+}
+
 async function renderSystem() {
   const [status, events, health] = await Promise.all([api("/api/system/status"), api("/api/push/events?limit=100"), api("/health")]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
@@ -945,7 +1037,7 @@ async function renderRoute() {
   $("#page-eyebrow").textContent = eyebrow;
   $$(`[data-route]`).forEach(link => link.classList.toggle("active", link.dataset.route === current));
   loading();
-  const renderers = { epg: renderEpg, channels: renderChannelsAdmin, subscriptions: renderSubscriptions, recordings: renderRecordings, summaries: renderSummaries, bookmarks: renderBookmarks, system: renderSystem };
+  const renderers = { epg: renderEpg, channels: renderChannelsAdmin, sources: renderSources, subscriptions: renderSubscriptions, recordings: renderRecordings, summaries: renderSummaries, bookmarks: renderBookmarks, system: renderSystem };
   try {
     await renderers[current]();
     if (token === appState.renderToken) $("#view").focus({ preventScroll: true });

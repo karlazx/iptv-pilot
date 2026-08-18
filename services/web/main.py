@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import time as time_module
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 import uvicorn
@@ -182,6 +183,38 @@ class ChannelBatchUpdate(BaseModel):
     disabled: bool
 
 
+class SourceCreate(BaseModel):
+    channel_id: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=2000)
+    note: str = Field(default="", max_length=200)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_url(self):
+        parsed = urlparse(self.url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("url must be an http(s) URL")
+        return self
+
+
+class SourceUpdate(BaseModel):
+    url: str | None = Field(default=None, min_length=1, max_length=2000)
+    note: str | None = Field(default=None, max_length=200)
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_url(self):
+        if self.url is not None:
+            parsed = urlparse(self.url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("url must be an http(s) URL")
+        return self
+
+
+class SourceTestRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+
 def serialize(value: Any) -> Any:
     if isinstance(value, ObjectId):
         return str(value)
@@ -344,6 +377,159 @@ def channel_detail(channel_id: str) -> dict:
             },
         }
     )
+
+
+def _merge_sources(channels: list[dict], custom_rows: list[dict]) -> list[dict]:
+    """Merge seed-derived streams (m3u_url + candidates) with user custom_sources."""
+    sources: list[dict] = []
+    channel_name_by_id = {row["channel_id"]: (row.get("name") or row["channel_id"]) for row in channels}
+    for channel in channels:
+        current_url = channel.get("m3u_url")
+        candidates = list(dict.fromkeys(channel.get("stream_candidates") or []))
+        if current_url and current_url not in candidates:
+            candidates.insert(0, current_url)
+        for url in candidates:
+            sources.append(
+                {
+                    "channel_id": channel["channel_id"],
+                    "channel_name": channel_name_by_id.get(channel["channel_id"], channel["channel_id"]),
+                    "url": url,
+                    "source_type": "seed",
+                    "note": "",
+                    "enabled": True,
+                    "current": url == current_url,
+                }
+            )
+    for row in custom_rows:
+        sources.append(
+            {
+                "_id": row["_id"],
+                "channel_id": row["channel_id"],
+                "channel_name": channel_name_by_id.get(row["channel_id"], row["channel_id"]),
+                "url": row["url"],
+                "source_type": "custom",
+                "note": row.get("note", ""),
+                "enabled": row.get("enabled", True),
+                "current": False,
+            }
+        )
+    return sources
+
+
+@app.get("/api/sources")
+def sources() -> dict:
+    """Merged stream list: seed candidates + user custom_sources."""
+    channels = list(
+        database.channels.find(
+            {}, {"channel_id": 1, "name": 1, "name_override": 1, "m3u_url": 1, "stream_candidates": 1}
+        ).sort("channel_id", 1)
+    )
+    for row in channels:
+        row["name"] = row.get("name_override") or row.get("name") or row["channel_id"]
+    custom_rows = list(database.custom_sources.find().sort("created_at", -1))
+    rows = _merge_sources(channels, custom_rows)
+    latest_sync = database.channels.find_one(sort=[("updated_at", -1)])
+    return serialize(
+        {
+            "m3u_summary": {
+                "source": "iptv-api result.m3u",
+                "last_sync_at": (latest_sync or {}).get("updated_at"),
+                "seed_stream_count": sum(1 for row in rows if row["source_type"] == "seed"),
+            },
+            "sources": rows,
+        }
+    )
+
+
+@app.post("/api/sources", status_code=201)
+def create_source(payload: SourceCreate) -> dict:
+    if not database.channels.find_one({"channel_id": payload.channel_id}):
+        raise HTTPException(status_code=422, detail="channel_id does not exist")
+    document = payload.model_dump()
+    document["created_at"] = datetime.now(UTC)
+    document["updated_at"] = document["created_at"]
+    result = database.custom_sources.insert_one(document)
+    return serialize(database.custom_sources.find_one({"_id": result.inserted_id}))
+
+
+@app.patch("/api/sources/{source_id}")
+def update_source(source_id: str, payload: SourceUpdate) -> dict:
+    update = payload.model_dump(exclude_unset=True)
+    if not update:
+        raise HTTPException(status_code=422, detail="no source fields provided")
+    update["updated_at"] = datetime.now(UTC)
+    result = database.custom_sources.find_one_and_update(
+        {"_id": object_id(source_id)}, {"$set": update}, return_document=ReturnDocument.AFTER
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="source not found")
+    return serialize(result)
+
+
+@app.delete("/api/sources/{source_id}", status_code=204, response_class=Response)
+def delete_source(source_id: str) -> Response:
+    result = database.custom_sources.delete_one({"_id": object_id(source_id)})
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail="source not found")
+    return Response(status_code=204)
+
+
+async def _probe_source(url: str) -> dict:
+    """Probe an HLS source: fetch playlist + first media segment, return status/size/elapsed."""
+    if live_http_client is None:
+        raise HTTPException(status_code=503, detail="live proxy is not ready")
+    started = time_module.perf_counter()
+    try:
+        upstream = await open_live_response(live_http_client, url)
+        status = upstream.status_code
+        if response_is_playlist(upstream):
+            content = await read_live_response(upstream)
+            text = content.decode("utf-8", errors="replace")
+            segment_url = None
+            for raw in text.splitlines():
+                line = raw.strip()
+                if line and not line.startswith("#"):
+                    segment_url = urljoin(str(upstream.url), line)
+                    break
+            first_segment: dict[str, Any] | None = None
+            if segment_url:
+                segment_started = time_module.perf_counter()
+                try:
+                    seg = await open_live_response(live_http_client, segment_url)
+                    seg_bytes = len(await read_live_response(seg))
+                    first_segment = {
+                        "status": seg.status_code,
+                        "size_bytes": seg_bytes,
+                        "elapsed_ms": int((time_module.perf_counter() - segment_started) * 1000),
+                    }
+                except LiveProxyError as exc:
+                    first_segment = {"error": str(exc)}
+            return {
+                "ok": status == 200,
+                "status": status,
+                "content_type": upstream.headers.get("content-type", ""),
+                "elapsed_ms": int((time_module.perf_counter() - started) * 1000),
+                "first_segment": first_segment,
+            }
+        return {
+            "ok": status == 200,
+            "status": status,
+            "content_type": upstream.headers.get("content-type", ""),
+            "elapsed_ms": int((time_module.perf_counter() - started) * 1000),
+            "first_segment": None,
+        }
+    except LiveProxyError as exc:
+        return {
+            "ok": False,
+            "status": getattr(exc, "status_code", None),
+            "error": str(exc),
+            "elapsed_ms": int((time_module.perf_counter() - started) * 1000),
+        }
+
+
+@app.post("/api/sources/test")
+async def test_source(payload: SourceTestRequest) -> dict:
+    return await _probe_source(payload.url)
 
 
 def channel_stream_options(channel_id: str) -> dict:
