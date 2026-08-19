@@ -52,6 +52,16 @@ normalized_channels = {
     if value.strip()
 }
 
+# Live buffer profiles. ``buffer_duration`` maps to hls.js ``maxBufferLength``
+# and ``live_sync`` to ``liveSyncDurationCount``. The balanced profile matches
+# the historical hard-coded defaults (60s / 10 segments).
+LIVE_BUFFER_PROFILES = {
+    "low": {"label": "低延迟", "buffer_duration": 15, "live_sync": 4},
+    "balanced": {"label": "平衡", "buffer_duration": 60, "live_sync": 10},
+    "smooth": {"label": "流畅", "buffer_duration": 120, "live_sync": 15},
+}
+LIVE_BUFFER_DEFAULT = "balanced"
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -213,6 +223,10 @@ class SourceUpdate(BaseModel):
 
 class SourceTestRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
+
+
+class BufferProfileUpdate(BaseModel):
+    profile: Literal["low", "balanced", "smooth"]
 
 
 def serialize(value: Any) -> Any:
@@ -968,6 +982,36 @@ def download_recording(recording_id: str) -> FileResponse:
 @app.get("/api/push/events")
 def push_events(limit: int = Query(100, ge=1, le=500)) -> list[dict]:
     return serialize(list(database.push_events.find().sort("updated_at", -1).limit(limit)))
+
+
+def _live_buffer_profile() -> dict:
+    row = database.settings.find_one({"key": "live_buffer_profile"})
+    profile = (row or {}).get("value", LIVE_BUFFER_DEFAULT)
+    if profile not in LIVE_BUFFER_PROFILES:
+        profile = LIVE_BUFFER_DEFAULT
+    return {
+        "profile": profile,
+        "profiles": {
+            key: {"key": key, **value}
+            for key, value in LIVE_BUFFER_PROFILES.items()
+        },
+        "default": LIVE_BUFFER_DEFAULT,
+    }
+
+
+@app.get("/api/settings/buffer")
+def get_buffer_profile() -> dict:
+    return serialize(_live_buffer_profile())
+
+
+@app.patch("/api/settings/buffer")
+def set_buffer_profile(payload: BufferProfileUpdate) -> dict:
+    database.settings.update_one(
+        {"key": "live_buffer_profile"},
+        {"$set": {"value": payload.profile, "updated_at": datetime.now(UTC)}},
+        upsert=True,
+    )
+    return serialize(_live_buffer_profile())
 
 
 @app.get("/api/system/status")

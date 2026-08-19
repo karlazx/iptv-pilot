@@ -10,6 +10,7 @@ const appState = {
   liveVisibilityHandler: null,
   liveResumeOnVisible: false,
   liveConnectTimer: null,
+  bufferProfileCache: null,
 };
 
 const routeMeta = {
@@ -112,6 +113,14 @@ function streamQualityLabel(quality) {
   if (Number.isFinite(mbps)) parts.push(`${mbps.toFixed(1)}Mbps`);
   if (quality.sustainable === false) parts.push("偏慢");
   return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
+async function loadBufferProfile(force = false) {
+  if (!appState.bufferProfileCache || force) {
+    const data = await api("/api/settings/buffer");
+    appState.bufferProfileCache = data.profiles[data.profile];
+  }
+  return appState.bufferProfileCache;
 }
 
 async function api(path, options = {}) {
@@ -574,7 +583,7 @@ function openLivePlayer(channelId, title) {
   const preparing = $("#live-preparing");
   const source = `/api/channels/${encodeURIComponent(channelId)}/live`;
   let reconnectAttempts = 0;
-  const connect = (automatic = false) => {
+  const connect = async (automatic = false) => {
     if (!automatic) reconnectAttempts = 0;
     if (appState.liveConnectTimer) {
       clearTimeout(appState.liveConnectTimer);
@@ -585,15 +594,18 @@ function openLivePlayer(channelId, title) {
     video.load();
     preparing.hidden = false;
     preparing.innerHTML = '<span class="spinner"></span><strong>正在连接直播</strong><small>首次连接通常需要数秒。</small>';
+    const buffer = await loadBufferProfile();
+    const maxBufferLength = buffer.buffer_duration;
+    const liveSyncDurationCount = buffer.live_sync;
     if (window.Hls?.isSupported()) {
       const hls = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        backBufferLength: 60,
-        liveSyncDurationCount: 10,
-        liveMaxLatencyDurationCount: 20,
+        maxBufferLength,
+        maxMaxBufferLength: Math.max(maxBufferLength * 2, 120),
+        backBufferLength: maxBufferLength,
+        liveSyncDurationCount,
+        liveMaxLatencyDurationCount: Math.max(liveSyncDurationCount * 2, 20),
         maxLiveSyncPlaybackRate: 1.0,
         maxBufferHole: 1,
         highBufferWatchdogPeriod: 2,
@@ -1014,17 +1026,28 @@ async function testSourceUrl(url, channelId) {
 }
 
 async function renderSystem() {
-  const [status, events, health] = await Promise.all([api("/api/system/status"), api("/api/push/events?limit=100"), api("/health")]);
+  const [status, events, health, buffer] = await Promise.all([api("/api/system/status"), api("/api/push/events?limit=100"), api("/health"), api("/api/settings/buffer")]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
+  const profileOptions = Object.values(buffer.profiles || {}).map(row => `<option value="${esc(row.key)}" ${row.key === buffer.profile ? "selected" : ""}>${esc(row.label)}（缓冲 ${row.buffer_duration}s · 同步 ${row.live_sync} 段）</option>`).join("");
   $("#view").innerHTML = `
     ${pageIntro("查看业务统计和邮件推送审计。容器与磁盘明细未通过管理 API 暴露，避免把宿主权限交给网页。")}
     <div class="stats-grid"><article class="stat-card"><small>可播频道</small><strong>${esc(status.channels)}</strong></article><article class="stat-card"><small>EPG 节目</small><strong>${esc(status.epg_programs)}</strong></article><article class="stat-card"><small>启用订阅</small><strong>${esc(status.subscriptions)}</strong></article><article class="stat-card"><small>录制记录</small><strong>${esc(recordingTotal)}</strong></article></div>
     <div class="split-layout system-layout">
+      <section class="panel"><div class="panel-header"><h2>直播缓冲档位</h2><span class="badge">${esc(buffer.profile)}</span></div><div class="panel-body"><label class="field"><span>播放缓冲模式</span><select class="select" id="buffer-profile-select">${profileOptions}</select></label><p class="meta-row" style="margin-top:8px">低延迟≈低缓冲更实时、流畅≈大缓冲更稳定；切换后新打开的直播立即生效。</p></div></section>
       <section class="panel"><div class="panel-header"><h2>推送事件</h2><span class="badge">${events.length} 条</span></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>通道</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${events.map(row => `<tr><td>${esc(row.provider)}</td><td><span class="badge ${row.status === "delivered" ? "success" : row.status === "failed" ? "danger" : ""}">${esc(row.status)}</span></td><td>${esc(formatDateTime(row.updated_at))}</td></tr>`).join("") || '<tr><td colspan="3">暂无事件</td></tr>'}</tbody></table></div></section>
       <div class="detail-stack"><section class="panel"><div class="panel-header"><h2>直播规范化池</h2><span class="badge">${(status.normalizer_pool?.channels || []).length}/${status.normalizer_pool?.max_concurrency ?? 2} 路</span></div><div class="panel-body">${(status.normalizer_pool?.channels || []).length ? status.normalizer_pool.channels.map(row => `<p class="meta-row"><span class="badge info">手动</span><span>${esc(row.name)}</span><span>${row.healthy === true ? '<span class="badge success">健康</span>' : row.healthy === false ? '<span class="badge danger">异常</span>' : '<span class="badge">未知</span>'}</span><span>${esc(formatDateTime(row.measured_at))}</span></p>`).join("") : '<p class="meta-row">当前无手动指定的规范化频道。</p>'}</div></section>
       <section class="panel"><div class="panel-header"><h2>服务状态</h2></div><div class="panel-body"><p><span class="badge success">API 正常</span></p><p class="meta-row">检查时间：${esc(formatDateTime(health.time))}</p><p class="meta-row">最新摘要：${esc(formatDateTime(status.latest_summary_at))}</p></div></section>
       <section class="panel"><div class="panel-header"><h2>API 访问令牌</h2></div><div class="panel-body"><p class="meta-row">仅在 NAS 开启 WEB_API_TOKEN 后填写，保存在本次浏览器会话中。</p><label class="field"><span>Bearer Token</span><input class="input" id="api-token" type="password" autocomplete="off" value="${esc(sessionStorage.getItem("iptv_api_token") || "")}"></label><div class="button-row" style="margin-top:12px"><button class="button small" id="save-token">保存</button><button class="button small secondary" id="clear-token">清除</button></div></div></section></div>
     </div>`;
+  $("#buffer-profile-select").addEventListener("change", async event => {
+    const profile = event.target.value;
+    try {
+      await api("/api/settings/buffer", { method: "PATCH", body: { profile } });
+      appState.bufferProfileCache = null;
+      toast("缓冲档位已切换，新打开的直播立即生效");
+      renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  });
   $("#save-token").addEventListener("click", () => { sessionStorage.setItem("iptv_api_token", $("#api-token").value.trim()); toast("令牌已保存到当前会话"); });
   $("#clear-token").addEventListener("click", () => { sessionStorage.removeItem("iptv_api_token"); $("#api-token").value = ""; toast("会话令牌已清除"); });
 }
