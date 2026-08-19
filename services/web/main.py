@@ -985,7 +985,32 @@ def system_status() -> dict:
         "latest_summary_at": serialize(
             (database.summaries.find_one(sort=[("created_at", -1)]) or {}).get("created_at")
         ),
+        "normalizer_pool": _normalizer_pool(),
     }
+
+
+def _normalizer_pool() -> dict:
+    """Describe the live-normalizer pool: manually pinned channels and their health."""
+    rows = []
+    for channel_id in sorted(normalized_channels):
+        channel = database.channels.find_one(
+            {"channel_id": channel_id},
+            {"name": 1, "name_override": 1, "normalizer_quality": 1},
+        )
+        quality = (channel or {}).get("normalizer_quality") or {}
+        rows.append(
+            {
+                "channel_id": channel_id,
+                "name": (channel or {}).get("name_override")
+                or (channel or {}).get("name")
+                or channel_id,
+                "manual": True,
+                "healthy": quality.get("healthy"),
+                "measured_at": quality.get("measured_at"),
+                "segment_timing": quality.get("segment_timing"),
+            }
+        )
+    return {"channels": rows, "max_concurrency": int(os.getenv("LIVE_NORMALIZE_MAX_CHANNELS", "2"))}
 
 
 @app.post("/api/bookmarks", status_code=201)

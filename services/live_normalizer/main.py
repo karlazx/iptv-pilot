@@ -53,6 +53,7 @@ def ffmpeg_command(url: str, directory: Path) -> list[str]:
         "-err_detect", "ignore_err",
         "-thread_queue_size", "1024",
         "-use_wallclock_as_timestamps", "1",
+        "-readrate", "1",
         "-i", url,
         "-map", "0:v:0", "-map", "0:a:0?",
         # The CCTV source is 50 fps. Drop it to the target cadence before
