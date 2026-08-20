@@ -834,7 +834,7 @@ async function renderChannelsAdmin() {
   const channels = await api("/api/channels/admin");
   const categories = ["央视频道", "卫视频道", "国际频道", "地方与其他"];
   $("#view").innerHTML = `
-    ${pageIntro("管理频道名称、分类、排序与启用状态。改名/改分类写入 override 字段，不会被次日 EPG 同步覆盖。", '<button class="button" id="admin-batch-enable" type="button">批量启用</button> <button class="button secondary" id="admin-batch-disable" type="button">批量禁用</button>')}
+    ${pageIntro("管理频道名称、分类、排序与启用状态。改名/改分类写入 override 字段，不会被次日 EPG 同步覆盖。", '<button class="button" id="admin-new-channel" type="button">＋ 添加频道</button> <button class="button secondary" id="admin-batch-enable" type="button">批量启用</button> <button class="button secondary" id="admin-batch-disable" type="button">批量禁用</button>')}
     <div class="toolbar"><label class="field"><span>分类筛选</span><select class="select" id="admin-category-filter"><option value="">全部分类</option>${categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label><div class="grow"></div><span class="badge" id="admin-count">${channels.length} 个频道</span></div>
     <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" id="admin-check-all" aria-label="全选"></th><th>名称</th><th>分类</th><th>线路</th><th>排序权重</th><th>状态</th><th></th></tr></thead><tbody id="admin-body"></tbody></table></div></section>`;
   const renderRows = () => {
@@ -843,6 +843,7 @@ async function renderChannelsAdmin() {
     $("#admin-count").textContent = `${rows.length} 个频道`;
     $("#admin-body").innerHTML = rows.length ? rows.map(row => {
       const disabled = row.disabled === true;
+      const deletable = row.source !== "iptv-api";
       return `<tr>
         <td><input type="checkbox" class="admin-check" data-channel-id="${esc(row.channel_id)}"></td>
         <td><strong>${esc(row.name)}</strong><small>${esc(row.channel_id)}${row.name_override ? " · 已改名" : ""}${row.category_override ? " · 已改分类" : ""}</small></td>
@@ -850,7 +851,7 @@ async function renderChannelsAdmin() {
         <td>${row.stream_count || 0}</td>
         <td>${row.sort_weight ?? "—"}</td>
         <td>${disabled ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</td>
-        <td><div class="table-actions"><button class="button small secondary" data-admin-edit="${esc(row.channel_id)}">编辑</button><button class="button small ghost" data-admin-detail="${esc(row.channel_id)}">详情</button><button class="button small ${disabled ? "secondary" : "danger"}" data-admin-toggle="${esc(row.channel_id)}">${disabled ? "启用" : "禁用"}</button></div></td>
+        <td><div class="table-actions"><button class="button small secondary" data-admin-edit="${esc(row.channel_id)}">编辑</button><button class="button small ghost" data-admin-detail="${esc(row.channel_id)}">详情</button><button class="button small ${disabled ? "secondary" : "danger"}" data-admin-toggle="${esc(row.channel_id)}">${disabled ? "启用" : "禁用"}</button>${deletable ? `<button class="button small danger" data-admin-delete="${esc(row.channel_id)}">删除</button>` : ""}</div></td>
       </tr>`;
     }).join("") : `<tr><td colspan="7">${emptyState("没有频道", "当前筛选条件下没有频道。", true)}</td></tr>`;
   };
@@ -871,10 +872,12 @@ async function renderChannelsAdmin() {
   };
   $("#admin-batch-enable").addEventListener("click", () => batch(false));
   $("#admin-batch-disable").addEventListener("click", () => batch(true));
+  $("#admin-new-channel").addEventListener("click", () => openChannelCreateForm());
   $("#admin-body").addEventListener("click", async event => {
     const edit = event.target.closest("[data-admin-edit]");
     const detail = event.target.closest("[data-admin-detail]");
     const toggle = event.target.closest("[data-admin-toggle]");
+    const del = event.target.closest("[data-admin-delete]");
     if (edit) return openChannelAdminForm(channels.find(row => row.channel_id === edit.dataset.adminEdit));
     if (detail) return openChannelDetail(detail.dataset.adminDetail);
     if (toggle) {
@@ -886,6 +889,39 @@ async function renderChannelsAdmin() {
         renderRoute();
       } catch (error) { toast(error.message, "error"); }
     }
+    if (del) {
+      const row = channels.find(item => item.channel_id === del.dataset.adminDelete);
+      if (!confirm(`确定删除频道「${row?.name}」（${row?.channel_id}）？此操作不可撤销。`)) return;
+      try {
+        await api(`/api/channels/${encodeURIComponent(row.channel_id)}`, { method: "DELETE" });
+        toast("频道已删除"); appState.channels = null; renderRoute();
+      } catch (error) { toast(error.message, "error"); }
+    }
+  });
+}
+
+function openChannelCreateForm() {
+  openModal("添加频道", `<form id="channel-create-form" class="form-grid">
+    <label class="field wide"><span>频道 ID</span><input class="input" name="channel_id" required maxlength="100" placeholder="自定义 ID，避免与内置频道冲突（如 MY-TV-1）"></label>
+    <label class="field wide"><span>频道名称</span><input class="input" name="name" required maxlength="100" placeholder="例如：我的频道"></label>
+    <label class="field wide"><span>直播源 URL</span><input class="input" name="m3u_url" required placeholder="http://... 或 https://..."></label>
+    <label class="field"><span>分类</span><select class="select" name="category">${["央视频道","卫视频道","国际频道","地方与其他"].map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label>
+    <label class="field"><span>状态</span><select class="select" name="enabled"><option value="true" selected>启用</option><option value="false">禁用</option></select></label>
+    <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">添加</button></div>
+  </form>`);
+  $("#channel-create-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      await api("/api/channels", { method: "POST", body: {
+        channel_id: data.get("channel_id").trim(),
+        name: data.get("name").trim(),
+        m3u_url: data.get("m3u_url").trim(),
+        category: data.get("category"),
+        enabled: data.get("enabled") === "true",
+      }});
+      toast("频道已添加"); closeModal(); appState.channels = null; renderRoute();
+    } catch (error) { toast(error.message, "error"); }
   });
 }
 
@@ -1036,7 +1072,7 @@ async function renderSystem() {
     ${pageIntro("查看业务统计和邮件推送审计。容器与磁盘明细未通过管理 API 暴露，避免把宿主权限交给网页。")}
     <div class="stats-grid"><article class="stat-card"><small>可播频道</small><strong>${esc(status.channels)}</strong></article><article class="stat-card"><small>EPG 节目</small><strong>${esc(status.epg_programs)}</strong></article><article class="stat-card"><small>启用订阅</small><strong>${esc(status.subscriptions)}</strong></article><article class="stat-card"><small>录制记录</small><strong>${esc(recordingTotal)}</strong></article></div>
     <div class="split-layout system-layout">
-      <section class="panel"><div class="panel-header"><h2>直播缓冲档位</h2><span class="badge">${esc(buffer.profile)}</span></div><div class="panel-body"><label class="field"><span>播放缓冲模式</span><select class="select" id="buffer-profile-select">${profileOptions}</select></label><p class="meta-row" style="margin-top:8px">低延迟≈低缓冲更实时、流畅≈大缓冲更稳定；切换后新打开的直播立即生效。</p></div></section>
+      <section class="panel"><div class="panel-header"><h2>直播缓冲档位</h2><span class="badge">${esc(buffer.profile)}</span></div><div class="panel-body compact"><label class="field compact"><span>播放缓冲模式</span><select class="select" id="buffer-profile-select">${profileOptions}</select></label><p class="meta-row" style="margin-top:6px">低延迟≈低缓冲更实时、流畅≈大缓冲更稳定；切换后新打开的直播立即生效。</p></div></section>
       <section class="panel"><div class="panel-header"><h2>推送事件</h2><span class="badge">${events.length} 条</span></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>通道</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${events.map(row => `<tr><td>${esc(row.provider)}</td><td><span class="badge ${row.status === "delivered" ? "success" : row.status === "failed" ? "danger" : ""}">${esc(row.status)}</span></td><td>${esc(formatDateTime(row.updated_at))}</td></tr>`).join("") || '<tr><td colspan="3">暂无事件</td></tr>'}</tbody></table></div></section>
       <div class="detail-stack"><section class="panel"><div class="panel-header"><h2>直播规范化池</h2><span class="badge">${(status.normalizer_pool?.channels || []).length}/${status.normalizer_pool?.max_concurrency ?? 2} 路</span></div><div class="panel-body">${(status.normalizer_pool?.channels || []).length ? status.normalizer_pool.channels.map(row => `<p class="meta-row"><span class="badge info">手动</span><span>${esc(row.name)}</span><span>${row.healthy === true ? '<span class="badge success">健康</span>' : row.healthy === false ? '<span class="badge danger">异常</span>' : '<span class="badge">未知</span>'}</span><span>${esc(formatDateTime(row.measured_at))}</span></p>`).join("") : '<p class="meta-row">当前无手动指定的规范化频道。</p>'}</div></section>
       <section class="panel"><div class="panel-header"><h2>服务状态</h2></div><div class="panel-body"><p><span class="badge success">API 正常</span></p><p class="meta-row">检查时间：${esc(formatDateTime(health.time))}</p><p class="meta-row">最新摘要：${esc(formatDateTime(status.latest_summary_at))}</p></div></section>

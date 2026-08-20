@@ -193,6 +193,21 @@ class ChannelBatchUpdate(BaseModel):
     disabled: bool
 
 
+class ChannelCreate(BaseModel):
+    channel_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=100)
+    m3u_url: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="地方与其他", max_length=40)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_url(self):
+        parsed = urlparse(self.m3u_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("m3u_url must be an http(s) URL")
+        return self
+
+
 class SourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     url: str = Field(min_length=1, max_length=2000)
@@ -366,6 +381,48 @@ def batch_channel_admin(payload: ChannelBatchUpdate) -> dict:
         {"$set": {"disabled": payload.disabled, "updated_at": datetime.now(UTC)}},
     )
     return {"matched": result.matched_count, "modified": result.modified_count}
+
+
+@app.post("/api/channels", status_code=201)
+def create_channel(payload: ChannelCreate) -> dict:
+    existing = database.channels.find_one({"channel_id": payload.channel_id})
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="channel_id already exists and would be overwritten by the next seed sync",
+        )
+    document = payload.model_dump()
+    document["source"] = "manual"
+    document["created_at"] = datetime.now(UTC)
+    document["updated_at"] = document["created_at"]
+    document["stream_candidates"] = [document["m3u_url"]]
+    database.channels.insert_one(document)
+    row = database.channels.find_one({"channel_id": payload.channel_id})
+    display = channel_display(row)
+    display["stream_count"] = 1
+    return serialize(display)
+
+
+@app.delete("/api/channels/{channel_id}", status_code=204, response_class=Response)
+def delete_channel(channel_id: str) -> Response:
+    current = database.channels.find_one({"channel_id": channel_id})
+    if not current:
+        raise HTTPException(status_code=404, detail="channel not found")
+    if current.get("source") == "iptv-api":
+        raise HTTPException(
+            status_code=409,
+            detail="seed 同步的内置频道不可删除，仅可禁用",
+        )
+    active_subscriptions = database.subscriptions.count_documents(
+        {"channel_id": channel_id, "enabled": True}, limit=1
+    )
+    if active_subscriptions:
+        raise HTTPException(
+            status_code=409,
+            detail="该频道存在未结束的订阅，无法删除；请先停用或删除相关订阅",
+        )
+    database.channels.delete_one({"channel_id": channel_id})
+    return Response(status_code=204)
 
 
 @app.get("/api/channels/{channel_id}/detail")
