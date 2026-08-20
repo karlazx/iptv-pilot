@@ -194,10 +194,11 @@ class ChannelBatchUpdate(BaseModel):
 
 
 class SourceCreate(BaseModel):
-    channel_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=100)
     url: str = Field(min_length=1, max_length=2000)
     note: str = Field(default="", max_length=200)
     enabled: bool = True
+    channel_id: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def validate_url(self):
@@ -208,9 +209,11 @@ class SourceCreate(BaseModel):
 
 
 class SourceUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
     url: str | None = Field(default=None, min_length=1, max_length=2000)
     note: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None
+    channel_id: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def validate_url(self):
@@ -406,6 +409,7 @@ def _merge_sources(channels: list[dict], custom_rows: list[dict]) -> list[dict]:
             sources.append(
                 {
                     "channel_id": channel["channel_id"],
+                    "name": channel_name_by_id.get(channel["channel_id"], channel["channel_id"]),
                     "channel_name": channel_name_by_id.get(channel["channel_id"], channel["channel_id"]),
                     "url": url,
                     "source_type": "seed",
@@ -415,11 +419,13 @@ def _merge_sources(channels: list[dict], custom_rows: list[dict]) -> list[dict]:
                 }
             )
     for row in custom_rows:
+        channel_id = row.get("channel_id")
         sources.append(
             {
                 "_id": row["_id"],
-                "channel_id": row["channel_id"],
-                "channel_name": channel_name_by_id.get(row["channel_id"], row["channel_id"]),
+                "name": row.get("name") or urlparse(row["url"]).netloc,
+                "channel_id": channel_id,
+                "channel_name": channel_name_by_id.get(channel_id) if channel_id else None,
                 "url": row["url"],
                 "source_type": "custom",
                 "note": row.get("note", ""),
@@ -457,8 +463,6 @@ def sources() -> dict:
 
 @app.post("/api/sources", status_code=201)
 def create_source(payload: SourceCreate) -> dict:
-    if not database.channels.find_one({"channel_id": payload.channel_id}):
-        raise HTTPException(status_code=422, detail="channel_id does not exist")
     document = payload.model_dump()
     document["created_at"] = datetime.now(UTC)
     document["updated_at"] = document["created_at"]
@@ -471,9 +475,16 @@ def update_source(source_id: str, payload: SourceUpdate) -> dict:
     update = payload.model_dump(exclude_unset=True)
     if not update:
         raise HTTPException(status_code=422, detail="no source fields provided")
+    unset: dict[str, str] = {}
+    if "channel_id" in update and update["channel_id"] is None:
+        unset["channel_id"] = ""
+        update.pop("channel_id")
     update["updated_at"] = datetime.now(UTC)
+    operation: dict[str, Any] = {"$set": update}
+    if unset:
+        operation["$unset"] = unset
     result = database.custom_sources.find_one_and_update(
-        {"_id": object_id(source_id)}, {"$set": update}, return_document=ReturnDocument.AFTER
+        {"_id": object_id(source_id)}, operation, return_document=ReturnDocument.AFTER
     )
     if not result:
         raise HTTPException(status_code=404, detail="source not found")
