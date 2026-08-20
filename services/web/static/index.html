@@ -17,13 +17,22 @@
       </a>
       <nav class="nav-list">
         <a href="#/epg" data-route="epg"><span aria-hidden="true">▦</span>节目单</a>
-        <a href="#/channels" data-route="channels"><span aria-hidden="true">▤</span>频道</a>
-        <a href="#/sources" data-route="sources"><span aria-hidden="true">◈</span>直播源</a>
         <a href="#/subscriptions" data-route="subscriptions"><span aria-hidden="true">◎</span>订阅</a>
         <a href="#/recordings" data-route="recordings"><span aria-hidden="true">●</span>录制</a>
         <a href="#/summaries" data-route="summaries"><span aria-hidden="true">≡</span>摘要</a>
         <a href="#/bookmarks" data-route="bookmarks"><span aria-hidden="true">♡</span>收藏</a>
-        <a href="#/system" data-route="system"><span aria-hidden="true">⌁</span>系统</a>
+        <div class="nav-group" id="nav-group-settings">
+          <button class="nav-group-toggle" type="button" aria-expanded="true" aria-controls="nav-group-settings-body">
+            <span class="nav-group-icon" aria-hidden="true">⌁</span>
+            <span class="nav-group-label">系统设置</span>
+            <span class="nav-group-chevron" aria-hidden="true">▾</span>
+          </button>
+          <div class="nav-group-body" id="nav-group-settings-body">
+            <a href="#/system" data-route="system"><span aria-hidden="true">⚙</span>通用设置</a>
+            <a href="#/channels" data-route="channels"><span aria-hidden="true">▤</span>频道管理</a>
+            <a href="#/sources" data-route="sources"><span aria-hidden="true">◈</span>直播源管理</a>
+          </div>
+        </div>
       </nav>
       <div class="sidebar-foot">
         <span class="live-dot"></span>
@@ -55,7 +64,7 @@
       <a href="#/recordings" data-route="recordings"><span>●</span>录制</a>
       <a href="#/summaries" data-route="summaries"><span>≡</span>摘要</a>
       <a href="#/bookmarks" data-route="bookmarks"><span>♡</span>收藏</a>
-      <a href="#/system" data-route="system"><span>⌁</span>系统</a>
+      <a href="#/system" data-route="system"><span>⚙</span>设置</a>
     </nav>
   </div>
 

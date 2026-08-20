@@ -46,6 +46,16 @@ a { color: inherit; }
 .nav-list a span { width: 20px; text-align: center; font-size: 19px; }
 .nav-list a:hover { color: #fff; background: rgba(255,255,255,.07); }
 .nav-list a.active { color: #fff; background: linear-gradient(90deg, rgba(105,125,237,.34), rgba(105,125,237,.13)); box-shadow: inset 3px 0 0 #8495f6; }
+.nav-group { display: grid; gap: 4px; }
+.nav-group-toggle { display: flex; align-items: center; gap: 13px; width: 100%; min-height: 46px; padding: 0 15px; border: 0; border-radius: 13px; background: transparent; color: #bfc7df; font: inherit; font-weight: 650; cursor: pointer; text-align: left; transition: .18s ease; }
+.nav-group-toggle:hover { color: #fff; background: rgba(255,255,255,.07); }
+.nav-group-icon { width: 20px; text-align: center; font-size: 19px; }
+.nav-group-label { flex: 1; }
+.nav-group-chevron { width: 12px; text-align: center; font-size: 11px; color: #8f9cc0; transition: transform .18s ease; }
+.nav-group.collapsed .nav-group-chevron { transform: rotate(-90deg); }
+.nav-group-body { display: grid; gap: 4px; padding-left: 18px; }
+.nav-group-body a { min-height: 40px; padding-left: 12px; font-size: 14px; font-weight: 600; }
+.nav-group.collapsed .nav-group-body { display: none; }
 .sidebar-foot { margin-top: auto; display: flex; align-items: center; gap: 9px; padding: 14px; border-top: 1px solid rgba(255,255,255,.09); color: #aeb8d4; font-size: 12px; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #43d0a6; box-shadow: 0 0 0 5px rgba(67,208,166,.12); }
 

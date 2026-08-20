@@ -21,7 +21,7 @@ const routeMeta = {
   recordings: ["录制与处理", "RECORDINGS"],
   summaries: ["节目摘要", "AI SUMMARIES"],
   bookmarks: ["我的收藏", "BOOKMARKS"],
-  system: ["系统状态", "SYSTEM"],
+  system: ["通用设置", "SETTINGS"],
 };
 
 const statusMeta = {
@@ -1087,6 +1087,13 @@ $("#modal").addEventListener("click", event => {
 });
 document.addEventListener("keydown", event => { if (event.key === "Escape" && !$("#modal").hidden) closeModal(); });
 $("#refresh-button").addEventListener("click", () => { appState.channels = null; appState.bookmarks = null; renderRoute(); checkHealth(); });
+document.querySelectorAll(".nav-group-toggle").forEach(toggle => {
+  toggle.addEventListener("click", () => {
+    const group = toggle.closest(".nav-group");
+    const collapsed = group.classList.toggle("collapsed");
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  });
+});
 window.addEventListener("hashchange", renderRoute);
 if (!location.hash) location.hash = "#/epg";
 renderRoute();
