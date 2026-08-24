@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from services.web.media import (
+from iptv_pilot.web.media import (
     MediaNotFoundError,
     MediaPathError,
     download_media_type,

@@ -1,6 +1,6 @@
 /* global db, sleep */
 const uri = process.env.MONGODB_URI;
-const databaseName = process.env.MONGODB_DATABASE || "iptv_manager";
+const databaseName = process.env.MONGODB_DATABASE || "iptv_pilot";
 if (!uri) throw new Error("MONGODB_URI is required");
 
 const connection = new Mongo(uri);

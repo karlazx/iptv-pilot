@@ -1,15 +1,19 @@
 # REST API
 
-Base URL：`http://NAS_IP:${WEB_PORT}`。当前极空间实例为 `http://YOUR_NAS_IP:5190`。OpenAPI：`GET /docs`，健康检查：`GET /health`。若配置了 `WEB_API_TOKEN`，所有 `/api/*` 请求需携带 `Authorization: Bearer <token>`。
+Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检查：`GET /health`。若配置了 `WEB_API_TOKEN`，所有 `/api/*` 请求需携带 `Authorization: Bearer <token>`。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/channels?category=` | 频道列表 |
+| GET | `/api/channels/admin` | 管理视图中的完整频道列表 |
+| POST/PATCH/DELETE | `/api/channels...` | 创建、修改、批量启停或删除自定义频道 |
+| GET/POST/PATCH/DELETE | `/api/sources...` | 管理用户提供的直播线路 |
+| POST | `/api/sources/test` | 测试用户提供的线路 |
 | GET | `/api/channels/{channel_id}/live` | 获取同源代理后的频道 HLS 直播清单 |
 | GET | `/api/live/proxy/{signed_token}` | 获取直播子清单、密钥或媒体分片；仅使用服务端签名 URL |
 | GET | `/api/epg?channel=CCTV-1&date=2026-08-12` | 某频道某日节目单 |
 | GET | `/api/epg/search?q=新闻` | EPG 标题/简介中文与英文子串搜索 |
-| GET | `/api/summaries/latest?limit=10` | 最新摘要，扣子 Bot 首发接口 |
+| GET | `/api/summaries/latest?limit=10` | 最新摘要 |
 | GET | `/api/summaries?date=2026-08-12` | 某日摘要 |
 | GET | `/api/summaries/{id}` | 摘要与转录详情 |
 | GET | `/api/search?q=关键词&vector=false` | 摘要/转录搜索；`vector=true` 仅在安装并启用 embedding 后生效 |
@@ -22,8 +26,9 @@ Base URL：`http://NAS_IP:${WEB_PORT}`。当前极空间实例为 `http://YOUR_N
 | GET | `/api/recordings/{id}` | 查看录制、转录、摘要与推送事件的完整状态 |
 | GET | `/api/recordings/{id}/play` | 浏览器播放；TS 首次访问会转封装为 MP4，支持 Range/拖动 |
 | GET | `/api/recordings/{id}/download` | 下载原始录像文件 |
-| GET | `/api/push/events` | 扣子查询/邮件推送事件审计 |
+| GET | `/api/push/events` | 推送事件审计 |
 | GET | `/api/system/status` | 频道、EPG、订阅和录制状态统计 |
+| GET/PATCH | `/api/settings/buffer` | 查询或更新直播缓冲档位 |
 | POST | `/api/bookmarks` | 新建或更新收藏 |
 | GET | `/api/bookmarks?user=default` | 收藏列表 |
 | DELETE | `/api/bookmarks/{id}` | 取消收藏 |
@@ -65,9 +70,7 @@ Base URL：`http://NAS_IP:${WEB_PORT}`。当前极空间实例为 `http://YOUR_N
 
 ## 通知通道
 
-当前正式主动通知为 `PUSH_PROVIDER=email`：163 SMTP 将摘要发送到 Coze Agent 邮箱，由 Coze 继续通知用户。Coze API 会话与飞书发布渠道不互通，因此不作为主动通知通道。
-
-`GET /api/push/events` 可查询 `email=delivered/failed` 审计事件。保留的 Coze Provider 代码只用于未来实验，不属于当前生产配置。
+通知默认关闭。需要邮件通知时设置 `PUSH_PROVIDER=email` 并配置你自己的 SMTP 服务；可使用 `GET /api/push/events` 查询 `delivered/failed` 审计事件。Coze Provider 作为可选实验适配器保留，不属于默认部署要求。
 
 ## 录像播放说明
 

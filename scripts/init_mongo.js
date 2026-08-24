@@ -1,5 +1,5 @@
 /* global db, rs, sleep */
-const databaseName = process.env.MONGODB_DATABASE || "iptv_manager";
+const databaseName = process.env.MONGODB_DATABASE || "iptv_pilot";
 const appUser = process.env.IPTV_DB_USER || "iptv_user";
 const appPassword = process.env.IPTV_DB_PASSWORD || "change-me-iptv";
 const mongotPassword = process.env.MONGOT_PASSWORD || "change-me-mongot";

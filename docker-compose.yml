@@ -1,21 +1,21 @@
-name: iptv-manager
+name: iptv-pilot
 
 x-app-environment: &app-environment
   TZ: ${TZ:-Asia/Shanghai}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_manager?authSource=iptv_manager&replicaSet=rs0}
-  MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_manager}
+  MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0}
+  MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
 
 x-worker: &worker
-  image: iptv-manager-app:${APP_TAG:-local}
+  image: iptv-pilot:${APP_TAG:-local}
   build:
     context: .
-    dockerfile: services/Dockerfile
+    dockerfile: Dockerfile
     args:
-      INSTALL_AI_DEPS: ${INSTALL_AI_DEPS:-1}
+      INSTALL_AI_DEPS: ${INSTALL_AI_DEPS:-0}
       INSTALL_FFMPEG: ${INSTALL_FFMPEG:-1}
       INSTALL_EMBEDDING_DEPS: ${INSTALL_EMBEDDING_DEPS:-0}
-      PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+      PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.org/simple}
   restart: unless-stopped
   env_file: .env
   environment: *app-environment
@@ -48,7 +48,7 @@ services:
       mongodb:
         condition: service_healthy
     environment:
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_manager}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
       IPTV_DB_USER: ${IPTV_DB_USER:-iptv_user}
       IPTV_DB_PASSWORD: ${IPTV_DB_PASSWORD:-change-me-iptv}
       MONGOT_PASSWORD: ${MONGOT_PASSWORD:-change-me-mongot}
@@ -93,8 +93,8 @@ services:
       mongot:
         condition: service_started
     environment:
-      MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_manager?authSource=iptv_manager&replicaSet=rs0}
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_manager}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
     volumes:
       - ./scripts/init_search.js:/scripts/init_search.js:ro
     entrypoint: ["mongosh", "--nodb", "--file", "/scripts/init_search.js"]
@@ -140,23 +140,24 @@ services:
       STREAM_QUALITY_WORKERS: ${STREAM_QUALITY_WORKERS:-3}
 
   live-normalizer:
-    image: iptv-manager-live-normalizer:${APP_TAG:-local}
+    image: iptv-pilot:${APP_TAG:-local}-live-normalizer
+    profiles: ["hardware-accel"]
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: Dockerfile
       args:
         INSTALL_AI_DEPS: 0
         INSTALL_FFMPEG: 0
         INSTALL_SYSTEM_FFMPEG: 1
         INSTALL_EMBEDDING_DEPS: 0
-        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
-        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.aliyun.com}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://deb.debian.org}
     restart: unless-stopped
-    command: ["python", "-m", "services.live_normalizer.main"]
+    command: ["python", "-m", "iptv_pilot.live_normalizer.main"]
     env_file: .env
     environment:
       <<: *app-environment
-      LIVE_NORMALIZE_CHANNELS: ${LIVE_NORMALIZE_CHANNELS:-CCTV-1}
+      LIVE_NORMALIZE_CHANNELS: ${LIVE_NORMALIZE_CHANNELS:-}
       LIVE_NORMALIZE_MAX_CHANNELS: ${LIVE_NORMALIZE_MAX_CHANNELS:-2}
       LIVE_NORMALIZE_ROOT: /data/media-cache/live-hls
       LIVE_NORMALIZE_VAAPI_DEVICE: /dev/dri/renderD128
@@ -191,7 +192,7 @@ services:
 
   epg-engine:
     <<: *worker
-    command: ["python", "-m", "services.epg_engine.main"]
+    command: ["python", "-m", "iptv_pilot.epg_engine.main"]
     environment:
       <<: *app-environment
       EPG_URLS: ${EPG_URLS:-/data/m3u/epg/epg.xml}
@@ -202,7 +203,7 @@ services:
 
   scheduler:
     <<: *worker
-    command: ["python", "-m", "services.scheduler.main"]
+    command: ["python", "-m", "iptv_pilot.scheduler.main"]
     environment:
       <<: *app-environment
       SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-60}
@@ -212,7 +213,7 @@ services:
 
   recorder:
     <<: *worker
-    command: ["python", "-m", "services.recorder.main"]
+    command: ["python", "-m", "iptv_pilot.recorder.main"]
     environment:
       <<: *app-environment
       RECORDING_POLL_SECONDS: ${RECORDING_POLL_SECONDS:-5}
@@ -226,10 +227,10 @@ services:
 
   asr:
     <<: *worker
-    command: ["python", "-m", "services.asr.main"]
+    command: ["python", "-m", "iptv_pilot.asr.main"]
     environment:
       <<: *app-environment
-      ASR_BACKEND: ${ASR_BACKEND:-faster_whisper}
+      ASR_BACKEND: ${ASR_BACKEND:-mock}
       ASR_MODEL: ${ASR_MODEL:-small}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
       ASR_DEVICE: ${ASR_DEVICE:-cpu}
@@ -252,10 +253,10 @@ services:
 
   llm:
     <<: *worker
-    command: ["python", "-m", "services.llm.main"]
+    command: ["python", "-m", "iptv_pilot.llm.main"]
     environment:
       <<: *app-environment
-      LLM_PROVIDER: ${LLM_PROVIDER:-ark}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       LLM_MODEL: ${LLM_MODEL:-doubao-seed-1-6-250615}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
@@ -271,11 +272,11 @@ services:
 
   push:
     <<: *worker
-    command: ["python", "-m", "services.push.main"]
+    command: ["python", "-m", "iptv_pilot.push.main"]
     environment:
       <<: *app-environment
-      PUSH_PROVIDER: ${PUSH_PROVIDER:-email}
-      PUSH_EMAIL_MODE: ${PUSH_EMAIL_MODE:-always}
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-none}
+      PUSH_EMAIL_MODE: ${PUSH_EMAIL_MODE:-fallback}
       PUSH_POLL_SECONDS: ${PUSH_POLL_SECONDS:-10}
       PUSH_MAX_RETRIES: ${PUSH_MAX_RETRIES:-3}
       COZE_BOT_ID: ${COZE_BOT_ID:-}
@@ -293,18 +294,18 @@ services:
 
   web:
     <<: *worker
-    image: iptv-manager-web:local
+    image: iptv-pilot:${APP_TAG:-local}-web
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: Dockerfile
       args:
         INSTALL_AI_DEPS: 0
         INSTALL_FFMPEG: 0
         INSTALL_SYSTEM_FFMPEG: 0
         INSTALL_EMBEDDING_DEPS: 0
-        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
-        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.aliyun.com}
-    command: ["python", "-m", "services.web.main"]
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://deb.debian.org}
+    command: ["python", "-m", "iptv_pilot.web.main"]
     environment:
       <<: *app-environment
       WEB_HOST: ${WEB_HOST:-0.0.0.0}
@@ -317,7 +318,7 @@ services:
       MEDIA_REMUX_TIMEOUT_SECONDS: ${MEDIA_REMUX_TIMEOUT_SECONDS:-300}
       LIVE_PROXY_TIMEOUT_SECONDS: ${LIVE_PROXY_TIMEOUT_SECONDS:-20}
       LIVE_TOKEN_TTL_SECONDS: ${LIVE_TOKEN_TTL_SECONDS:-900}
-      LIVE_NORMALIZE_CHANNELS: ${LIVE_NORMALIZE_CHANNELS:-CCTV-1}
+      LIVE_NORMALIZE_CHANNELS: ${LIVE_NORMALIZE_CHANNELS:-}
       LIVE_NORMALIZE_ROOT: /data/media-cache/live-hls
       LIVE_NORMALIZE_STALE_SECONDS: ${LIVE_NORMALIZE_STALE_SECONDS:-60}
       EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-none}
@@ -343,8 +344,8 @@ services:
     env_file: .env
     environment:
       IPTV_DATA_ROOT: /data
-      MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_manager?authSource=iptv_manager&replicaSet=rs0}
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_manager}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
     volumes:
       - ./scripts/backup.sh:/scripts/backup.sh:ro

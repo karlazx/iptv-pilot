@@ -8,23 +8,10 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-
-LEGACY_GROUP_MARKER = "# iptv-manager: official international channels"
-GROUP_BEGIN_MARKER = "# BEGIN iptv-manager verified international channels"
-GROUP_END_MARKER = "# END iptv-manager verified international channels"
-DOMESTIC_BEGIN_MARKER = "# BEGIN iptv-manager community domestic subscriptions"
-DOMESTIC_END_MARKER = "# END iptv-manager community domestic subscriptions"
-GROUP_LINES = [
-    GROUP_BEGIN_MARKER,
-    "🌍国际频道,#genre#",
-    "NHK World-Japan",
-    "CNA",
-    "BBC News",
-    "Al Jazeera English",
-    "France 24 English",
-    "Arirang TV",
-    GROUP_END_MARKER,
-]
+GROUP_BEGIN_MARKER = "# BEGIN iptv-pilot user channels"
+GROUP_END_MARKER = "# END iptv-pilot user channels"
+SUBSCRIPTIONS_BEGIN_MARKER = "# BEGIN iptv-pilot user subscriptions"
+SUBSCRIPTIONS_END_MARKER = "# END iptv-pilot user subscriptions"
 
 
 def atomic_write(path: Path, content: str, mode: Optional[int] = None) -> None:
@@ -64,19 +51,19 @@ def install_managed_subscriptions(config_dir: Path, asset: Path) -> None:
     unmanaged: list[str] = []
     in_managed_block = False
     for line in current.splitlines():
-        if line == DOMESTIC_BEGIN_MARKER:
+        if line == SUBSCRIPTIONS_BEGIN_MARKER:
             in_managed_block = True
             continue
-        if line == DOMESTIC_END_MARKER:
+        if line == SUBSCRIPTIONS_END_MARKER:
             in_managed_block = False
             continue
         if not in_managed_block:
             unmanaged.append(line)
 
     block = [
-        DOMESTIC_BEGIN_MARKER,
+        SUBSCRIPTIONS_BEGIN_MARKER,
         *asset.read_text(encoding="utf-8").strip().splitlines(),
-        DOMESTIC_END_MARKER,
+        SUBSCRIPTIONS_END_MARKER,
         "",
     ]
     output: list[str] = []
@@ -95,39 +82,53 @@ def install_managed_subscriptions(config_dir: Path, asset: Path) -> None:
     atomic_write(subscribe_file, "\n".join(output).strip() + "\n", 0o640)
 
 
-def install_managed_channel_group(demo_file: Path) -> None:
+def channel_names(asset: Path) -> list[str]:
+    names: list[str] = []
+    for raw_line in asset.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name = line.split(",", 1)[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def install_managed_channel_group(demo_file: Path, names: list[str]) -> None:
     lines = demo_file.read_text(encoding="utf-8").splitlines()
     start: int | None = None
     end: int | None = None
+    group_lines = [GROUP_BEGIN_MARKER, "User channels,#genre#", *names, GROUP_END_MARKER]
 
     if GROUP_BEGIN_MARKER in lines:
         start = lines.index(GROUP_BEGIN_MARKER)
         if GROUP_END_MARKER in lines[start:]:
             end = start + lines[start:].index(GROUP_END_MARKER) + 1
-    elif LEGACY_GROUP_MARKER in lines:
-        # Older releases appended the managed block at the end without an end marker.
-        start = lines.index(LEGACY_GROUP_MARKER)
-        end = len(lines)
 
     if start is not None:
         end = end or len(lines)
-        lines[start:end] = GROUP_LINES
+        lines[start:end] = group_lines
     else:
         if lines and lines[-1].strip():
             lines.append("")
-        lines.extend(GROUP_LINES)
+        lines.extend(group_lines)
 
     atomic_write(demo_file, "\n".join(lines).rstrip() + "\n", demo_file.stat().st_mode & 0o777)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Install persistent, verified iptv-api sources")
+    parser = argparse.ArgumentParser(description="Install user-provided iptv-api sources")
     parser.add_argument("config_dir", type=Path)
     parser.add_argument("env_file", type=Path)
     parser.add_argument(
-        "--include-community-domestic",
-        action="store_true",
-        help="install the user-approved, community-maintained domestic subscription list",
+        "--channels-file",
+        type=Path,
+        help="channel file using the 'name,url' format",
+    )
+    parser.add_argument(
+        "--subscriptions-file",
+        type=Path,
+        help="subscription file containing one user-authorized URL per line",
     )
     args = parser.parse_args()
 
@@ -139,22 +140,32 @@ def main() -> None:
     if not env_file.is_file():
         raise SystemExit("env file does not exist")
 
-    asset = Path(__file__).resolve().parent.parent / "config" / "iptv-api" / "official_international.txt"
     local_dir = config_dir / "local"
     local_dir.mkdir(mode=0o750, exist_ok=True)
-    destination = local_dir / asset.name
-    shutil.copyfile(asset, destination)
-    os.chmod(destination, 0o640)
+    installed: list[str] = []
+    if args.channels_file:
+        asset = args.channels_file.resolve()
+        if not asset.is_file():
+            raise SystemExit(f"channels file does not exist: {asset}")
+        names = channel_names(asset)
+        if not names:
+            raise SystemExit("channels file contains no channel entries")
+        destination = local_dir / "iptv_pilot_channels.txt"
+        shutil.copyfile(asset, destination)
+        os.chmod(destination, 0o640)
+        install_managed_channel_group(demo_file, names)
+        installed.append(str(destination))
 
-    install_managed_channel_group(demo_file)
-
-    if args.include_community_domestic:
-        domestic_asset = asset.parent / "community_domestic_subscriptions.txt"
-        install_managed_subscriptions(config_dir, domestic_asset)
+    if args.subscriptions_file:
+        subscriptions = args.subscriptions_file.resolve()
+        if not subscriptions.is_file():
+            raise SystemExit(f"subscriptions file does not exist: {subscriptions}")
+        install_managed_subscriptions(config_dir, subscriptions)
+        installed.append(str(config_dir / "subscribe.txt"))
 
     update_env(env_file, config_dir)
-    domestic_status = "enabled" if args.include_community_domestic else "unchanged"
-    print(f"iptv-api configured: {destination}; community domestic={domestic_status}")
+    details = ", ".join(installed) if installed else "configuration path only"
+    print(f"iptv-api configured: {details}")
 
 
 if __name__ == "__main__":

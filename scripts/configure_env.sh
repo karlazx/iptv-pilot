@@ -38,7 +38,7 @@ sed -i "s|^IPTV_API_CONFIG_PATH=.*|IPTV_API_CONFIG_PATH=$recording_root/iptv-api
 sed -i "s|^BACKUP_PATH=.*|BACKUP_PATH=$recording_root/backup|" "$env_file"
 sed -i "s|^IPTV_DB_PASSWORD=.*|IPTV_DB_PASSWORD=$db_password|" "$env_file"
 sed -i "s|^MONGOT_PASSWORD=.*|MONGOT_PASSWORD=$mongot_password|" "$env_file"
-sed -i "s|^MONGODB_URI=.*|MONGODB_URI=mongodb://iptv_user:$db_password@mongodb:27017/iptv_manager?authSource=iptv_manager\&replicaSet=rs0|" "$env_file"
+sed -i "s|^MONGODB_URI=.*|MONGODB_URI=mongodb://iptv_user:$db_password@mongodb:27017/iptv_pilot?authSource=iptv_pilot\&replicaSet=rs0|" "$env_file"
 
 echo "configured $env_file"
 echo "NVMe data: $nvme_root"

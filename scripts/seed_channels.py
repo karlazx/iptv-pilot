@@ -10,7 +10,6 @@ from pathlib import Path
 
 from pymongo import MongoClient, UpdateOne
 
-
 ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
 
 
@@ -44,7 +43,7 @@ def main() -> None:
     parser.add_argument("--watch", action="store_true", help="keep syncing when the M3U changes")
     args = parser.parse_args()
     uri = args.uri or os.environ["MONGODB_URI"]
-    database_name = os.getenv("MONGODB_DATABASE", "iptv_manager")
+    database_name = os.getenv("MONGODB_DATABASE", "iptv_pilot")
     database = MongoClient(uri, tz_aware=True)[database_name]
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     last_mtime = None

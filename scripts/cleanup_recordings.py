@@ -9,7 +9,7 @@ from pymongo import MongoClient
 
 def main() -> None:
     client = MongoClient(os.environ["MONGODB_URI"], tz_aware=True)
-    database = client[os.getenv("MONGODB_DATABASE", "iptv_manager")]
+    database = client[os.getenv("MONGODB_DATABASE", "iptv_pilot")]
     cutoff = datetime.now(UTC) - timedelta(days=int(os.getenv("RECORDING_RETENTION_DAYS", "30")))
     bookmarked_ids = {
         row["item_id"] for row in database.bookmarks.find({"item_type": "recording"}, {"item_id": 1})

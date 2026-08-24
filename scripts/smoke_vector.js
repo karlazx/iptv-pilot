@@ -1,8 +1,8 @@
 /* global db, sleep */
-const databaseName = process.env.MONGODB_DATABASE || "iptv_manager";
+const databaseName = process.env.MONGODB_DATABASE || "iptv_pilot";
 const appDb = db.getSiblingDB(databaseName);
-const collectionName = "phase0_vector_smoke";
-const indexName = "phase0_vector_index";
+const collectionName = "iptv_pilot_vector_smoke";
+const indexName = "iptv_pilot_vector_index";
 const collection = appDb.getCollection(collectionName);
 
 collection.drop();

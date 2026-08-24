@@ -51,7 +51,7 @@ def main() -> None:
                         "role": "user",
                         "type": "question",
                         "content_type": "text",
-                        "content": "IPTV 智能管家推送链路验收，请仅回复：收到。",
+                        "content": "IPTVPilot推送链路验收，请仅回复：收到。",
                     }
                 ],
             },

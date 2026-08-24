@@ -1,0 +1,4 @@
+# Copy this file outside the repository and add only streams you are authorized to use.
+# Format: channel name,stream URL
+# Example:
+# My Channel,https://stream.example.com/live/index.m3u8

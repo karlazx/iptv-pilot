@@ -11,13 +11,12 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from iptv_pilot.common.db import connect_database
 from scripts.seed_channels import parse_m3u
-from services.common.db import connect_database
-
 
 HEADERS = {
     "Accept": "application/vnd.apple.mpegurl, application/x-mpegURL, video/*, */*",
-    "User-Agent": "IPTV-Manager/1.0",
+    "User-Agent": "IPTVPilot/1.0",
 }
 
 

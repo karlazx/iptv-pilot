@@ -8,7 +8,7 @@ mkdir -p "$backup_root"
 
 mongodump \
   --uri "$MONGODB_URI" \
-  --db "${MONGODB_DATABASE:-iptv_manager}" \
+  --db "${MONGODB_DATABASE:-iptv_pilot}" \
   --archive="$backup_root/iptv_${timestamp}.archive.gz" \
   --gzip
 

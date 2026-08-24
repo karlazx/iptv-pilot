@@ -13,8 +13,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from iptv_pilot.common.db import connect_database
 from scripts.diagnose_live_quality import HEADERS, benchmark
-from services.common.db import connect_database
 
 
 def safe_error(exc: Exception) -> str:

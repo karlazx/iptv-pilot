@@ -1,0 +1,3 @@
+# Copy this file outside the repository and add one authorized M3U subscription URL per line.
+# Example:
+# https://provider.example.com/authorized-subscription.m3u

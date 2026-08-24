@@ -5,7 +5,6 @@ import os
 import tempfile
 from pathlib import Path
 
-
 EPG_URLS = "/data/m3u/epg/epg.xml"
 
 
@@ -39,7 +38,7 @@ def main() -> None:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
 
-    print("EPG configured: iptv-api mapped XML first, external sources as fallback")
+    print("EPG configured: local iptv-api XML source")
 
 
 if __name__ == "__main__":

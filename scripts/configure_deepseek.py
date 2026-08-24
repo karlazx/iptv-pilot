@@ -7,7 +7,6 @@ import re
 import tempfile
 from pathlib import Path
 
-
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 

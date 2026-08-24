@@ -4,18 +4,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from services.epg_engine.main import iter_xmltv, parse_xmltv_time
-from services.llm.providers import MockProvider, validate_summary
-from services.recorder.main import capture_stream, safe_name
-from services.web.live import LiveProxyError, LiveTokenSigner, rewrite_hls_manifest
-from services.scheduler.main import matches
-from services.live_normalizer.main import (
+from iptv_pilot.epg_engine.main import iter_xmltv, parse_xmltv_time
+from iptv_pilot.live_normalizer.main import (
     ffmpeg_command,
     manifest_entries,
     segment_timing,
     validate_segment_timeline,
 )
-from services.web.main import SubscriptionCreate, TimeRule
+from iptv_pilot.llm.providers import MockProvider, validate_summary
+from iptv_pilot.recorder.main import capture_stream, safe_name
+from iptv_pilot.scheduler.main import matches
+from iptv_pilot.web.live import LiveProxyError, LiveTokenSigner, rewrite_hls_manifest
+from iptv_pilot.web.main import SubscriptionCreate, TimeRule
 from scripts.refresh_stream_quality import preferred_index, should_switch
 
 
@@ -55,8 +55,8 @@ def test_recorder_falls_back_to_pyav(monkeypatch, tmp_path):
         calls.append("pyav")
         path.write_bytes(b"transport-stream")
 
-    monkeypatch.setattr("services.recorder.main._capture_with_ffmpeg", fail_ffmpeg)
-    monkeypatch.setattr("services.recorder.main._capture_with_pyav", pass_pyav)
+    monkeypatch.setattr("iptv_pilot.recorder.main._capture_with_ffmpeg", fail_ffmpeg)
+    monkeypatch.setattr("iptv_pilot.recorder.main._capture_with_pyav", pass_pyav)
     target = tmp_path / "capture.ts"
     method = capture_stream("https://example.test/live.m3u8", target, datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=30))
     assert method == "pyav"
@@ -88,11 +88,11 @@ def test_live_token_rejects_tampering():
 
 def test_live_token_is_stable_inside_time_bucket(monkeypatch):
     signer = LiveTokenSigner(secret=b"test-secret", lifetime_seconds=60)
-    monkeypatch.setattr("services.web.live.time.time", lambda: 120.1)
+    monkeypatch.setattr("iptv_pilot.web.live.time.time", lambda: 120.1)
     first = signer.sign("https://media.example/001.ts")
-    monkeypatch.setattr("services.web.live.time.time", lambda: 179.9)
+    monkeypatch.setattr("iptv_pilot.web.live.time.time", lambda: 179.9)
     assert signer.sign("https://media.example/001.ts") == first
-    monkeypatch.setattr("services.web.live.time.time", lambda: 180.1)
+    monkeypatch.setattr("iptv_pilot.web.live.time.time", lambda: 180.1)
     assert signer.sign("https://media.example/001.ts") != first
 
 
@@ -134,7 +134,7 @@ def test_segment_timeline_accepts_aligned_tracks(monkeypatch, tmp_path):
     class Result:
         stdout = '{"streams":[{"codec_type":"video","start_time":"10.0","duration":"2.0"},{"codec_type":"audio","start_time":"10.2","duration":"1.9"}]}'
 
-    monkeypatch.setattr("services.live_normalizer.main.subprocess.run", lambda *_a, **_kw: Result())
+    monkeypatch.setattr("iptv_pilot.live_normalizer.main.subprocess.run", lambda *_a, **_kw: Result())
     assert validate_segment_timeline(tmp_path / "segment.ts") == pytest.approx(0.2)
 
 
@@ -142,7 +142,7 @@ def test_segment_timeline_rejects_large_drift(monkeypatch, tmp_path):
     class Result:
         stdout = '{"streams":[{"codec_type":"video","start_time":"10.0","duration":"2.0"},{"codec_type":"audio","start_time":"97121.0","duration":"1.9"}]}'
 
-    monkeypatch.setattr("services.live_normalizer.main.subprocess.run", lambda *_a, **_kw: Result())
+    monkeypatch.setattr("iptv_pilot.live_normalizer.main.subprocess.run", lambda *_a, **_kw: Result())
     with pytest.raises(RuntimeError, match="timeline drift"):
         validate_segment_timeline(tmp_path / "segment.ts")
 
@@ -151,7 +151,7 @@ def test_segment_timeline_rejects_long_audio_track(monkeypatch, tmp_path):
     class Result:
         stdout = '{"streams":[{"codec_type":"video","start_time":"10.0","duration":"2.0"},{"codec_type":"audio","start_time":"10.1","duration":"12.0"}]}'
 
-    monkeypatch.setattr("services.live_normalizer.main.subprocess.run", lambda *_a, **_kw: Result())
+    monkeypatch.setattr("iptv_pilot.live_normalizer.main.subprocess.run", lambda *_a, **_kw: Result())
     with pytest.raises(RuntimeError, match="audio duration"):
         validate_segment_timeline(tmp_path / "segment.ts")
 
