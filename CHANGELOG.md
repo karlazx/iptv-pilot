@@ -1,13 +1,14 @@
-# Changelog
+# 变更日志
 
-All notable changes to IPTVPilot will be documented in this file. The project follows semantic versioning after its first tagged release.
+IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项目将遵循语义化版本规则。
 
-## Unreleased
+## 尚未发布
 
-- Renamed the project to IPTVPilot and the Python package to `iptv_pilot`.
-- Added Apache-2.0 licensing and public contribution documentation.
-- Removed bundled live channel, subscription, and third-party EPG URLs.
-- Removed private deployment reports, host addresses, and personal defaults.
-- Added automated tests and repository maintenance configuration.
-- Added automated GHCR image publishing, SBOM/provenance generation, and GitHub releases for semantic version tags.
-- Documented the post-v0.1 portability and ARM64 roadmap.
+- 项目更名为 IPTVPilot，Python 包名改为 `iptv_pilot`。
+- 增加 Apache-2.0 许可证、版权声明和公开协作文档。
+- 删除仓库内置的直播频道、订阅和第三方 EPG 地址。
+- 从当前版本和 Git 历史中删除私人部署报告、主机地址及个人默认值。
+- 增加自动化测试、CI、Dependabot 和仓库维护配置。
+- 增加 GHCR 镜像发布、SBOM、构建来源证明和 GitHub Release 自动化。
+- 记录 v0.1 之后的 ARM64 和通用部署路线图。
+- 统一使用简体中文管理台、API 提示和项目文档。

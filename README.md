@@ -2,30 +2,32 @@
 
 > Smart IPTV subscriptions, channel management, and program digests.
 
-IPTVPilot is a self-hosted IPTV assistant for trusted home networks. It combines channel and EPG management, scheduled recording, browser playback, speech-to-text, LLM-generated program digests, and email notifications in one Docker Compose stack.
+IPTVPilot 是一套面向可信家庭内网的自托管 IPTV 智能管家，通过 Docker Compose 将频道与节目单管理、预约录制、浏览器播放、语音转写、AI 节目摘要和邮件通知整合在一起。
 
 > [!IMPORTANT]
-> IPTVPilot does not include channel streams, IPTV subscriptions, or third-party EPG feeds. Configure only sources that you own or are authorized to use, and follow the laws and service terms that apply to you.
+> IPTVPilot 不提供任何可用的频道地址、IPTV 订阅或第三方 EPG 源。请只配置自有或已获授权的内容源，并遵守所在地法律、内容许可和服务条款。
 
-## Features
+## 主要功能
 
-- Manage channels and multiple stream candidates from one web console.
-- Import XMLTV EPG data and create keyword or channel-time subscriptions.
-- Record programs with FFmpeg and a PyAV fallback.
-- Play live HLS streams and browser-compatible recording copies.
-- Transcribe recordings with faster-whisper.
-- Generate structured digests with OpenAI-compatible LLM providers.
-- Send digest notifications through email.
-- Back up MongoDB and clean old recordings with maintenance profiles.
+- 在统一管理台中维护频道和多条候选线路。
+- 导入 XMLTV 节目单，按关键词或频道时间创建订阅。
+- 使用 FFmpeg 录制节目，并在失败时回退到 PyAV。
+- 在浏览器中播放 HLS 直播及兼容格式的录像。
+- 使用 faster-whisper 转写录像。
+- 通过 OpenAI 兼容的 LLM 服务生成结构化节目摘要。
+- 使用邮件发送摘要通知。
+- 通过维护任务备份 MongoDB、清理过期录像。
 
-## Requirements
+## 运行要求
 
-- Docker Engine and Docker Compose 2.21 or later.
-- An x86_64 Linux host or NAS. The optional live normalizer currently expects Intel VAAPI at `/dev/dri/renderD128`.
-- Sufficient storage for MongoDB, media cache, recordings, models, and backups.
-- User-provided and authorized M3U/HLS and XMLTV sources.
+- Docker Engine 和 Docker Compose 2.21 或更高版本。
+- x86_64 Linux 主机或 NAS。可选的直播规范化服务目前依赖 `/dev/dri/renderD128` 上的 Intel VAAPI。
+- 足够存放 MongoDB 数据、媒体缓存、录像、模型和备份的磁盘空间。
+- 用户自行提供且已获授权的 M3U/HLS 和 XMLTV 源。
 
-## Quick start
+首个开源版本只正式支持 `linux/amd64`。ARM64 和更通用的 CPU-only 部署计划见[路线图](ROADMAP.md)。
+
+## 快速开始
 
 ```bash
 git clone https://github.com/karlazx/iptv-pilot.git
@@ -33,14 +35,14 @@ cd iptv-pilot
 cp .env.example .env
 ```
 
-Edit `.env` and, at minimum:
+编辑 `.env`，至少完成以下配置：
 
-1. Replace `IPTV_DB_PASSWORD`, `MONGOT_PASSWORD`, and the matching password inside `MONGODB_URI`.
-2. Change every `/nas/iptv/...` storage path to a directory on your host.
-3. Configure your own EPG and IPTV source files.
-4. Configure an LLM provider, or use `LLM_PROVIDER=mock` for a local functional check.
+1. 替换 `IPTV_DB_PASSWORD`、`MONGOT_PASSWORD`，并同步修改 `MONGODB_URI` 中的密码。
+2. 将所有 `/nas/iptv/...` 存储路径改为主机上的实际目录。
+3. 配置自己的 EPG 和 IPTV 源文件。
+4. 配置 LLM 服务；仅做本地功能检查时可保留默认的 `LLM_PROVIDER=mock`。
 
-Then start the stack:
+启动服务：
 
 ```bash
 docker compose config --quiet
@@ -48,20 +50,22 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Open `http://YOUR_NAS_IP:5190`. The companion iptv-api service is exposed on port `5181` by default.
+打开 `http://你的_NAS_IP:5190`。配套的 iptv-api 服务默认使用端口 `5181`。
 
-The default configuration is intended for a trusted private network. Do not expose the management console or iptv-api directly to the public internet. See [SECURITY.md](SECURITY.md) for the deployment boundary.
+默认配置仅适用于可信内网，不要将管理台或 iptv-api 直接暴露到公网。部署边界详见[安全政策](SECURITY.md)。
 
-## Documentation
+## 文档
 
-- [Deployment guide](docs/deploy.md)
+- [部署指南](docs/deploy.md)
 - [REST API](docs/api.md)
-- [Architecture](docs/architecture.md)
-- [Roadmap](ROADMAP.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
+- [系统架构](docs/architecture.md)
+- [项目路线图](ROADMAP.md)
+- [参与贡献](CONTRIBUTING.md)
+- [安全政策](SECURITY.md)
 
-## Development
+本项目的管理台、API 提示和维护文档统一使用简体中文，暂不计划提供界面国际化。
+
+## 本地开发
 
 ```bash
 python3.12 -m venv .venv
@@ -71,21 +75,21 @@ python -m pytest
 ruff check .
 ```
 
-The Python package is named `iptv_pilot`. Docker images use the `iptv-pilot` repository name; Compose builds the default, web, and live-normalizer variants with separate tags.
+Python 包名为 `iptv_pilot`。Docker 镜像统一使用 `iptv-pilot` 仓库名，Compose 通过不同 tag 区分默认、Web 和直播规范化变体。
 
-Tagged releases publish signed build provenance and SBOM-enabled images to `ghcr.io/karlazx/iptv-pilot`. To use a published release instead of local image names, set:
+发布版本会将带 SBOM 和构建来源证明的镜像推送到 `ghcr.io/karlazx/iptv-pilot`。使用已发布镜像时，在 `.env` 中设置：
 
 ```dotenv
 IPTV_PILOT_IMAGE=ghcr.io/karlazx/iptv-pilot
 APP_TAG=0.1.0
 ```
 
-The Compose file retains build definitions so operators can always build the same variants locally.
+Compose 仍保留本地构建定义，用户可以自行构建全部镜像。
 
-## Project status
+## 项目状态
 
-IPTVPilot is an early-stage self-hosted project. Interfaces and deployment defaults may change before the first stable release. Back up your database and recordings before upgrading.
+IPTVPilot 目前处于早期阶段。在首个稳定版本发布前，接口和部署默认值可能发生变化。升级前请备份数据库和重要录像。
 
-## License
+## 开源协议
 
-Copyright 2026 karlazx. Licensed under the [Apache License 2.0](LICENSE).
+Copyright 2026 karlazx。项目采用 [Apache License 2.0](LICENSE) 开源。

@@ -1,39 +1,39 @@
-name: Bug report
-description: Report a reproducible IPTVPilot problem
-title: "[Bug]: "
+name: 缺陷报告
+description: 报告可复现的 IPTVPilot 问题
+title: "[缺陷]: "
 labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Remove credentials, private URLs, recordings, transcripts, and host details before submitting.
+      value: 提交前请删除凭据、私人 URL、录像、转写内容和主机信息。
   - type: textarea
     id: description
     attributes:
-      label: Problem
-      description: What happened, and what did you expect?
+      label: 问题描述
+      description: 实际发生了什么？你期望的行为是什么？
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
-      label: Reproduction steps
+      label: 复现步骤
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: IPTVPilot version or commit
+      label: IPTVPilot 版本或提交
     validations:
       required: true
   - type: textarea
     id: environment
     attributes:
-      label: Environment
-      description: OS, architecture, Docker, and Compose versions. Do not include addresses or secrets.
+      label: 运行环境
+      description: 操作系统、架构、Docker 和 Compose 版本。不要包含地址或秘密。
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: Redacted logs
+      label: 已脱敏日志
       render: shell

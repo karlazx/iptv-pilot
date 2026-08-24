@@ -1,9 +1,9 @@
-# Code of conduct
+# 行为准则
 
-IPTVPilot contributors and maintainers are expected to keep project spaces respectful, constructive, and welcoming.
+IPTVPilot 的贡献者和维护者应共同维护尊重、理性和友好的项目环境。
 
-Harassment, discrimination, threats, doxxing, sexualized attention, and deliberate disruption are not acceptable. Disagreements should focus on the technical work and its impact, not on individuals.
+骚扰、歧视、威胁、人肉搜索、带有性意味的关注和蓄意破坏均不可接受。意见不一致时，应围绕技术方案及其影响展开讨论，不针对个人。
 
-Maintainers may edit or remove comments, commits, issues, and other contributions that violate these expectations, and may temporarily or permanently restrict participation when necessary.
+维护者可以编辑或删除违反本准则的评论、提交、Issue 或其他贡献，并可在必要时临时或永久限制相关人员参与项目。
 
-Report conduct concerns privately to the maintainer through the contact method listed on the maintainer's GitHub profile. Reports will be handled as confidentially as practical.
+如需报告行为问题，请通过维护者 GitHub 个人资料中列出的联系方式私下联系。维护者会在实际可行范围内对报告内容保密。

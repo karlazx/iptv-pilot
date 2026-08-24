@@ -1,22 +1,22 @@
-# Third-party notices
+# 第三方软件声明
 
-IPTVPilot uses third-party software through Python packages, container images, optional AI models, and a vendored browser library. Each component remains subject to its own license.
+IPTVPilot 通过 Python 包、容器镜像、可选 AI 模型和内置浏览器库使用第三方软件。每个组件仍受其各自许可证约束。
 
-## Vendored browser library
+## 内置浏览器库
 
-- hls.js 1.6.16 — Apache License 2.0. The distributed license and attribution text is stored at `iptv_pilot/web/static/hls.LICENSE.txt`.
+- hls.js 1.6.16：Apache License 2.0。随项目分发的许可证和归属信息位于 `iptv_pilot/web/static/hls.LICENSE.txt`。
 
-## Runtime services
+## 运行时服务
 
-- MongoDB Community Server and MongoDB Community Search
+- MongoDB Community Server 和 MongoDB Community Search
 - guovern/iptv-api
-- Python container images
-- Alpine Linux container images
+- Python 容器镜像
+- Alpine Linux 容器镜像
 
-Review the license and distribution terms for the exact image versions used in a release before redistributing images.
+重新分发镜像前，应检查对应发布版本所使用镜像的许可证和分发条款。
 
-## Optional models and services
+## 可选模型与外部服务
 
-Model weights, hosted LLM APIs, SMTP providers, IPTV sources, and EPG sources are not covered by the IPTVPilot license. Operators must review and comply with the terms for each service or model they configure.
+模型权重、托管 LLM API、SMTP 服务、IPTV 源和 EPG 源不受 IPTVPilot 项目许可证覆盖。运营者必须自行审查并遵守所配置服务或模型的条款。
 
-Release artifacts should include a generated software bill of materials and the license reports produced by the release pipeline.
+发布产物应包含自动生成的软件物料清单以及发布流水线生成的许可证报告。

@@ -1,46 +1,46 @@
-# Deployment guide
+# 部署指南
 
-IPTVPilot is designed for a single trusted home server or NAS running Docker Compose. It has been exercised on x86_64 hardware; other architectures may require different media and AI dependencies.
+IPTVPilot 面向运行 Docker Compose 的单机家庭服务器或 NAS，首个开源版本以 x86_64 Linux 为正式支持环境。其他架构可能需要替换媒体、AI 或数据库搜索依赖。
 
-## 1. Prepare storage
+## 1. 准备存储目录
 
-Create dedicated host directories for:
+请分别准备以下主机目录：
 
-- MongoDB data
-- MongoDB Search data
-- recordings
-- browser media cache
-- downloaded AI models
-- M3U and EPG data
-- iptv-api configuration
-- backups
+- MongoDB 数据
+- MongoDB Search 数据
+- 录像
+- 浏览器媒体缓存
+- AI 模型
+- M3U 与 EPG 数据
+- iptv-api 配置
+- 数据库备份
 
-Copy the configuration template:
+复制配置模板：
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-Update every storage path in `.env`. Do not recursively change ownership on a shared storage root. The MongoDB container normally writes as UID/GID 998, so grant that identity access only to the selected MongoDB data directory.
+修改 `.env` 中的全部存储路径。不要对共享存储根目录递归修改权限。MongoDB 容器通常以 UID/GID 998 写入，只应为所选 MongoDB 数据目录授予相应权限。
 
-## 2. Configure credentials
+## 2. 配置凭据
 
-Replace both database placeholder passwords and keep the password in `MONGODB_URI` synchronized with `IPTV_DB_PASSWORD`:
+替换两个数据库占位密码，并保持 `MONGODB_URI` 中的密码与 `IPTV_DB_PASSWORD` 一致：
 
 ```dotenv
-IPTV_DB_PASSWORD=use-a-long-random-password
-MONGOT_PASSWORD=use-a-different-long-random-password
-MONGODB_URI=mongodb://iptv_user:use-a-long-random-password@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0
+IPTV_DB_PASSWORD=使用随机长密码
+MONGOT_PASSWORD=使用另一个随机长密码
+MONGODB_URI=mongodb://iptv_user:使用随机长密码@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0
 ```
 
-Keep `.env` outside backups, screenshots, issue reports, and shell transcripts. Never commit it.
+不要将 `.env` 放入备份截图、Issue、群聊或命令输出中，也不要提交到 Git。
 
-## 3. Configure IPTV and EPG sources
+## 3. 配置 IPTV 与 EPG
 
-The repository contains no working channel, subscription, or third-party EPG URLs. Start with the templates in `config/iptv-api/` and add only sources you are authorized to use.
+仓库不包含可工作的频道、订阅或第三方 EPG 地址。请复制 `config/iptv-api/` 下的模板，并只添加你有权使用的源。
 
-After initializing the upstream iptv-api configuration directory, install user-provided files with:
+初始化 iptv-api 持久化配置目录后，可安装用户自己的文件：
 
 ```bash
 python3 scripts/configure_iptv_api.py "$IPTV_API_CONFIG_PATH" .env \
@@ -48,17 +48,17 @@ python3 scripts/configure_iptv_api.py "$IPTV_API_CONFIG_PATH" .env \
   --subscriptions-file /path/to/my-subscriptions.txt
 ```
 
-Both file arguments are optional. The script always updates `IPTV_API_CONFIG_PATH`; when files are supplied it copies them into the persistent iptv-api configuration.
+两个文件参数均可省略。脚本始终更新 `IPTV_API_CONFIG_PATH`；提供文件时，会将其安装到持久化的 iptv-api 配置目录。
 
-`EPG_URLS` accepts a comma-separated fallback list. The default points only to the XMLTV file generated in the shared M3U directory:
+`EPG_URLS` 接受逗号分隔的降级列表。默认只使用共享 M3U 目录中的本地 XMLTV 文件：
 
 ```dotenv
 EPG_URLS=/data/m3u/epg/epg.xml
 ```
 
-## 4. Configure optional AI features
+## 4. 配置可选 AI 功能
 
-For a minimal functional deployment:
+默认配置使用 mock 后端，首次构建不安装大型 AI 依赖：
 
 ```dotenv
 INSTALL_AI_DEPS=0
@@ -68,15 +68,17 @@ EMBEDDING_BACKEND=none
 LLM_PROVIDER=mock
 ```
 
-For production transcription, use `INSTALL_AI_DEPS=1` and configure faster-whisper. Model downloads can be large and the first transcription will be slower.
+需要正式转写时，设置 `INSTALL_AI_DEPS=1` 并配置 faster-whisper。模型下载体积较大，第一次转写也会更慢。
 
-For LLM digests, configure one supported provider and its API key. OpenAI-compatible custom endpoints use `LLM_PROVIDER=custom`, `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY`.
+需要生成真实摘要时，配置任一受支持的 LLM Provider 及其 API Key。OpenAI 兼容的自定义服务使用 `LLM_PROVIDER=custom`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。
 
-Embedding search is optional. Enabling BGE-M3 requires `INSTALL_EMBEDDING_DEPS=1`, additional image build time, several gigabytes of model storage, and more memory.
+向量搜索默认关闭。启用 BGE-M3 需要设置 `INSTALL_EMBEDDING_DEPS=1`，会增加镜像构建时间、模型磁盘占用和运行内存。
 
-## 5. Validate and start
+通知默认关闭。需要邮件通知时，设置 `PUSH_PROVIDER=email` 并配置自己的 SMTP 服务。
 
-By default, Compose builds local images. For a published release, set `IPTV_PILOT_IMAGE=ghcr.io/karlazx/iptv-pilot` and set `APP_TAG` to the release version without the leading `v`.
+## 5. 验证并启动
+
+Compose 默认构建本地镜像。使用已发布版本时，将 `IPTV_PILOT_IMAGE` 设置为 `ghcr.io/karlazx/iptv-pilot`，并将 `APP_TAG` 设置为不带前导 `v` 的版本号。
 
 ```bash
 docker compose config --quiet
@@ -85,15 +87,15 @@ docker compose up -d
 docker compose ps
 ```
 
-Startup order is MongoDB, replica-set initialization, MongoDB Search, search-index initialization, and then the application workers.
+启动顺序为 MongoDB、副本集初始化、MongoDB Search、搜索索引初始化，最后是应用 Worker。
 
-Inspect startup logs with:
+查看启动日志：
 
 ```bash
 docker compose logs -f mongodb mongo-init mongot search-init web
 ```
 
-Validate the web service and database:
+验证 Web 服务和数据库：
 
 ```bash
 curl http://127.0.0.1:${WEB_PORT}/health
@@ -101,56 +103,56 @@ docker compose exec mongodb mongosh --quiet --eval 'rs.status().ok'
 docker compose exec mongodb mongosh --quiet --eval 'db.getSiblingDB("iptv_pilot").channels.countDocuments()'
 ```
 
-## 6. Live normalizer
+## 6. 直播规范化服务
 
-The optional `live-normalizer` service uses Intel VAAPI and maps `/dev/dri/renderD128`. It is excluded from the default startup. Other channels continue through the standard same-origin proxy.
+可选的 `live-normalizer` 服务使用 Intel VAAPI，并映射 `/dev/dri/renderD128`。默认启动不会包含该服务，其他频道继续使用普通同源代理。
 
-When VAAPI is available, list only channels that need timestamp and segment normalization:
+主机支持 VAAPI 时，只列出确实需要时间戳和分片规范化的频道：
 
 ```dotenv
-LIVE_NORMALIZE_CHANNELS=My Channel
+LIVE_NORMALIZE_CHANNELS=我的频道
 LIVE_NORMALIZE_MAX_CHANNELS=1
 ```
 
-Start the hardware-accelerated profile with:
+启动硬件加速 profile：
 
 ```bash
 docker compose --profile hardware-accel up -d --build
 ```
 
-## 7. Private-network boundary
+## 7. 内网使用边界
 
-The default stack is intended for a trusted LAN and does not require `WEB_API_TOKEN`. Do not forward ports 5190 or 5181 from an internet-facing router.
+默认部署面向可信局域网，不强制设置 `WEB_API_TOKEN`。请勿在公网路由器上转发 5190 或 5181 端口。
 
-If remote access is required, place the services behind a VPN or an HTTPS reverse proxy and configure `WEB_API_TOKEN`. Review the playback limitations described in [SECURITY.md](../SECURITY.md) before enabling the token.
+确需远程访问时，优先使用 VPN；也可部署 HTTPS 反向代理并配置 `WEB_API_TOKEN`。启用令牌前，请阅读[安全政策](../SECURITY.md)中关于媒体播放路径的限制。
 
-MongoDB and MongoDB Search ports must never be published to the host or internet.
+MongoDB 和 MongoDB Search 端口不得发布到宿主机或公网。
 
-## 8. Backups and retention
+## 8. 备份与清理
 
-Run a database backup:
+执行数据库备份：
 
 ```bash
 docker compose --profile maintenance run --rm backup
 ```
 
-Clean expired, non-bookmarked recordings:
+清理过期且未收藏的录像：
 
 ```bash
 docker compose --profile maintenance run --rm cleanup-recordings
 ```
 
-Schedule both operations only after performing a manual backup and restore test. Database backup does not include recording files; protect recordings with an independent storage backup policy.
+应先完成一次手工备份和恢复演练，再配置计划任务。数据库备份不包含录像文件，录像需要独立的存储备份策略。
 
-## 9. Upgrade procedure
+## 9. 升级流程
 
-Before upgrading:
+升级前：
 
-1. Back up MongoDB and important recordings.
-2. Read `CHANGELOG.md` for migration notes.
-3. Validate the new Compose configuration.
-4. Rebuild images and restart the stack.
-5. Check health, worker logs, channel sync, and a short recording.
+1. 备份 MongoDB 和重要录像。
+2. 阅读 `CHANGELOG.md` 中的迁移说明。
+3. 验证新的 Compose 配置。
+4. 重新构建镜像并启动服务。
+5. 检查健康状态、Worker 日志、频道同步和短时录制。
 
 ```bash
 git pull --ff-only
@@ -160,10 +162,10 @@ docker compose up -d
 docker compose ps
 ```
 
-## Known limitations
+## 已知限制
 
-- MongoDB runs as a single-node replica set and is not highly available.
-- The live normalizer currently targets Intel VAAPI on x86_64 Linux.
-- Authentication is a single optional bearer token, not a multi-user identity system.
-- Signed playback URLs are not yet implemented for every recording and normalized-live path.
-- AI features can require significant memory, disk space, and build time.
+- MongoDB 使用单节点副本集，不具备高可用能力。
+- 直播规范化目前只面向 x86_64 Linux 上的 Intel VAAPI。
+- 鉴权只有一个可选 Bearer Token，不是多用户身份系统。
+- 录像和部分规范化直播路径尚未全部使用短期签名 URL。
+- AI 功能可能占用较多内存、磁盘和构建时间。

@@ -1,14 +1,14 @@
-# Contributing to IPTVPilot
+# 参与贡献
 
-Thank you for helping improve IPTVPilot.
+感谢你帮助改进 IPTVPilot。
 
-## Before opening an issue
+## 提交 Issue 前
 
-- Search existing issues and the documentation.
-- Remove credentials, private URLs, recordings, transcripts, email addresses, and host details.
-- Use a minimal reproduction and include relevant software versions.
+- 搜索已有 Issue 和文档，确认问题尚未记录。
+- 删除凭据、私人 URL、录像、转写、邮箱和主机信息。
+- 提供最小复现步骤及相关软件版本。
 
-## Development setup
+## 开发环境
 
 ```bash
 python3.12 -m venv .venv
@@ -18,7 +18,7 @@ python -m pytest
 ruff check .
 ```
 
-Docker-related changes should also pass:
+涉及 Docker 的改动还应通过：
 
 ```bash
 cp .env.example .env
@@ -26,13 +26,13 @@ docker compose config --quiet
 docker compose build web
 ```
 
-## Pull requests
+## Pull Request 要求
 
-- Keep changes focused and explain the user-visible behavior.
-- Add or update tests for behavior changes.
-- Update documentation and `CHANGELOG.md` when users need to act.
-- Do not add working third-party channel, subscription, or EPG URLs.
-- Do not commit generated media, models, databases, logs, backups, or `.env` files.
-- Use clear commit messages. Squashing is not required, but each commit should be reviewable.
+- 保持改动聚焦，并说明对用户可见的行为变化。
+- 行为发生变化时增加或更新测试。
+- 用户需要采取操作时更新文档和 `CHANGELOG.md`。
+- 不得加入可工作的第三方频道、订阅或 EPG URL。
+- 不得提交生成的媒体、模型、数据库、日志、备份或 `.env`。
+- 使用清晰的提交说明，每个提交都应便于审查。
 
-By contributing, you certify that you have the right to submit the work and that it may be distributed under the Apache License 2.0.
+提交贡献即表示你有权提供相关内容，并同意其按 Apache License 2.0 分发。

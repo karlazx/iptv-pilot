@@ -1,24 +1,24 @@
-# Security policy
+# 安全政策
 
-## Supported versions
+## 支持范围
 
-Until IPTVPilot reaches a stable release, security fixes are provided only for the latest commit on the `main` branch.
+在 IPTVPilot 发布稳定版本前，安全修复只针对 `main` 分支的最新版本提供。
 
-## Reporting a vulnerability
+## 报告安全问题
 
-Please use GitHub private vulnerability reporting for this repository. Do not open a public issue containing credentials, private stream URLs, personal data, or working exploit details.
+请使用仓库的 GitHub 私密漏洞报告功能。不要在公开 Issue 中提交凭据、私人直播地址、个人数据或可直接利用的攻击细节。
 
-Include the affected commit, deployment topology, reproduction steps, expected impact, and any suggested mitigation. You should receive an acknowledgement within seven days.
+报告应包含受影响的提交、部署拓扑、复现步骤、预期影响和可选的修复建议。维护者计划在七天内确认收到报告。
 
-## Deployment boundary
+## 部署边界
 
-IPTVPilot is designed for a trusted private network. Its default deployment is not hardened for direct internet exposure and uses a single optional bearer token rather than user accounts or role-based access control.
+IPTVPilot 只面向可信内网。默认部署没有针对公网直接暴露进行加固，使用的是单一可选 Bearer Token，而不是用户账户或基于角色的权限系统。
 
-- Do not expose ports 5190, 5181, MongoDB, or MongoDB Search directly to the internet.
-- Prefer a VPN for remote access. Otherwise use an HTTPS reverse proxy and a strong `WEB_API_TOKEN`.
-- Be aware that native recording playback and some media paths do not yet support bearer headers or universal signed URLs.
-- Treat every configured stream, subscription, EPG, LLM, SMTP, and proxy endpoint as trusted configuration.
-- Keep `.env` permissions restricted and redact it from logs and issue reports.
-- Back up the database and recordings before upgrades.
+- 不要将 5190、5181、MongoDB 或 MongoDB Search 端口直接暴露到公网。
+- 远程访问优先使用 VPN；否则应配置 HTTPS 反向代理和高强度 `WEB_API_TOKEN`。
+- 原生录像播放和部分媒体路径尚未全部支持 Bearer Header 或统一的短期签名 URL。
+- 所有直播、订阅、EPG、LLM、SMTP 和代理地址都应视为可信配置。
+- 限制 `.env` 文件权限，并在日志和 Issue 中脱敏。
+- 升级前备份数据库和录像。
 
-The project intentionally does not bundle working IPTV or EPG sources. Users are responsible for the authorization and security of all configured sources.
+项目不会附带可工作的 IPTV 或 EPG 地址，用户应自行确保所有配置源合法、可信并已获授权。

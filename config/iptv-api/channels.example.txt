@@ -1,4 +1,4 @@
-# Copy this file outside the repository and add only streams you are authorized to use.
-# Format: channel name,stream URL
-# Example:
-# My Channel,https://stream.example.com/live/index.m3u8
+# 将此文件复制到仓库之外，并只添加你有权使用的直播源。
+# 格式：频道名称,直播 URL
+# 示例：
+# 我的频道,https://stream.example.com/live/index.m3u8

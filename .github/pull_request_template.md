@@ -1,14 +1,14 @@
-## Summary
+## 变更摘要
 
-Describe the user-visible change and why it is needed.
+说明用户可见的变化以及改动原因。
 
-## Verification
+## 验证
 
 - [ ] `python -m pytest`
 - [ ] `ruff check .`
-- [ ] Documentation updated when required
-- [ ] No credentials, private URLs, media, transcripts, or personal deployment data included
+- [ ] 已按需更新文档
+- [ ] 未包含凭据、私人 URL、媒体、转写或个人部署数据
 
-## Compatibility
+## 兼容性
 
-Describe configuration, database, API, or deployment compatibility considerations.
+说明配置、数据库、API 或部署兼容性影响。

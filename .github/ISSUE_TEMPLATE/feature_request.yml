@@ -1,21 +1,21 @@
-name: Feature request
-description: Propose a focused improvement
-title: "[Feature]: "
+name: 功能建议
+description: 提出一个目标明确的改进建议
+title: "[功能]: "
 labels: [enhancement]
 body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem to solve
+      label: 需要解决的问题
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed behavior
+      label: 建议方案
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
+      label: 考虑过的替代方案

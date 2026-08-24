@@ -1,25 +1,26 @@
-# Roadmap
+# 项目路线图
 
-This roadmap communicates direction rather than a delivery commitment. Priorities may change based on maintainer capacity and user feedback.
+路线图用于说明方向，不代表交付承诺。具体优先级会根据维护精力和用户反馈调整。
 
 ## v0.1
 
-- Publish the first Apache-2.0 open-source release for `linux/amd64`.
-- Provide local Docker Compose builds and GHCR release images.
-- Support channel management, XMLTV ingestion, subscriptions, recording, playback, optional transcription, program digests, and email notifications.
-- Keep all working IPTV and third-party EPG sources outside the repository.
+- 发布首个采用 Apache-2.0 的 `linux/amd64` 开源版本。
+- 提供本地 Docker Compose 构建和 GHCR 发布镜像。
+- 支持频道管理、XMLTV 导入、订阅、录制、播放、可选转写、节目摘要和邮件通知。
+- 确保所有可工作的 IPTV 与第三方 EPG 地址始终位于仓库之外。
 
-## After v0.1
+## v0.1 之后
 
-- Add and validate `linux/arm64` images.
-- Separate MongoDB Search, AI, and hardware-transcoding requirements into more portable deployment profiles.
-- Add a CPU-only live normalization option where practical.
-- Expand integration tests for full Docker Compose startup, backup restoration, and media pipelines.
-- Improve dependency and container image update automation.
+- 增加并验证 `linux/arm64` 镜像。
+- 将 MongoDB Search、AI 和硬件转码拆分为更灵活的部署 profile。
+- 在可行时增加 CPU-only 直播规范化方式。
+- 扩充 Docker Compose 完整启动、备份恢复和媒体流水线集成测试。
+- 改进依赖和容器镜像的自动更新流程。
 
-## Under consideration
+## 评估中的方向
 
-- Multi-user authentication and role-based access control.
-- Stronger validation and network isolation for user-configured upstream URLs.
-- Additional notification providers.
-- Broader user-interface localization.
+- 多用户鉴权和基于角色的权限控制。
+- 加强用户配置上游 URL 的校验和网络隔离。
+- 更多通知渠道。
+
+管理台、API 提示和维护文档将继续使用简体中文，暂不规划界面国际化。
