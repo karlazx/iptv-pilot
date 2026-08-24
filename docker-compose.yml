@@ -58,7 +58,7 @@ services:
     networks: [iptv]
 
   mongot-secrets:
-    image: alpine:3.22
+    image: alpine:3.22.5
     restart: "no"
     environment:
       MONGOT_PASSWORD: ${MONGOT_PASSWORD:-change-me-mongot}
@@ -68,7 +68,7 @@ services:
     networks: [iptv]
 
   mongot:
-    image: mongodb/mongodb-community-search:${MONGOT_TAG:-latest}
+    image: mongodb/mongodb-community-search:${MONGOT_TAG:-1.70.3}
     restart: unless-stopped
     depends_on:
       mongo-init:
@@ -101,7 +101,7 @@ services:
     networks: [iptv]
 
   iptv-api:
-    image: ${IPTV_API_IMAGE:-guovern/iptv-api:latest}
+    image: ${IPTV_API_IMAGE:-guovern/iptv-api:2.0.8}
     restart: unless-stopped
     environment:
       PUBLIC_DOMAIN: ${IPTV_API_PUBLIC_DOMAIN:-127.0.0.1}

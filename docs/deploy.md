@@ -146,6 +146,8 @@ docker compose --profile maintenance run --rm cleanup-recordings
 
 ## 9. 升级流程
 
+项目为基础镜像和配套服务提供了固定的默认版本，避免 `latest` 在无人确认时引入不兼容改动。尤其是 iptv-api 3.x 包含配置变化，升级前应先阅读其发布说明并在独立环境验证。
+
 升级前：
 
 1. 备份 MongoDB 和重要录像。
