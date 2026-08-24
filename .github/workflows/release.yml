@@ -89,4 +89,5 @@ jobs:
       - name: Publish generated release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "IPTVPilot $GITHUB_REF_NAME"
