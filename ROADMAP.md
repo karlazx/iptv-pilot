@@ -11,6 +11,7 @@
 
 ## v0.1 之后
 
+- 补充 README 产品截图和 GitHub Social Preview。
 - 增加并验证 `linux/arm64` 镜像。
 - 将 MongoDB Search、AI 和硬件转码拆分为更灵活的部署 profile。
 - 在可行时增加 CPU-only 直播规范化方式。
