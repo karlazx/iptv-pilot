@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: Build ${{ matrix.variant }} image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: app
+            suffix: ""
+            build_args: |
+              INSTALL_AI_DEPS=0
+              INSTALL_FFMPEG=1
+              INSTALL_SYSTEM_FFMPEG=0
+              INSTALL_EMBEDDING_DEPS=0
+          - variant: web
+            suffix: -web
+            build_args: |
+              INSTALL_AI_DEPS=0
+              INSTALL_FFMPEG=0
+              INSTALL_SYSTEM_FFMPEG=0
+              INSTALL_EMBEDDING_DEPS=0
+          - variant: live-normalizer
+            suffix: -live-normalizer
+            build_args: |
+              INSTALL_AI_DEPS=0
+              INSTALL_FFMPEG=0
+              INSTALL_SYSTEM_FFMPEG=1
+              INSTALL_EMBEDDING_DEPS=0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/karlazx/iptv-pilot
+          tags: |
+            type=semver,pattern={{version}},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}}.{{minor}},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}},suffix=${{ matrix.suffix }}
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          sbom: true
+          provenance: mode=max
+
+  github-release:
+    name: Create GitHub release
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish generated release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "IPTVPilot $GITHUB_REF_NAME"

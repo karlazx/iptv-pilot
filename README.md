@@ -72,6 +72,15 @@ ruff check .
 
 The Python package is named `iptv_pilot`. Docker images use the `iptv-pilot` repository name; Compose builds the default, web, and live-normalizer variants with separate tags.
 
+Tagged releases publish signed build provenance and SBOM-enabled images to `ghcr.io/karlazx/iptv-pilot`. To use a published release instead of local image names, set:
+
+```dotenv
+IPTV_PILOT_IMAGE=ghcr.io/karlazx/iptv-pilot
+APP_TAG=0.1.0
+```
+
+The Compose file retains build definitions so operators can always build the same variants locally.
+
 ## Project status
 
 IPTVPilot is an early-stage self-hosted project. Interfaces and deployment defaults may change before the first stable release. Back up your database and recordings before upgrading.

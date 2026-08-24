@@ -9,3 +9,4 @@ All notable changes to IPTVPilot will be documented in this file. The project fo
 - Removed bundled live channel, subscription, and third-party EPG URLs.
 - Removed private deployment reports, host addresses, and personal defaults.
 - Added automated tests and repository maintenance configuration.
+- Added automated GHCR image publishing, SBOM/provenance generation, and GitHub releases for semantic version tags.

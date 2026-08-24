@@ -76,6 +76,8 @@ Embedding search is optional. Enabling BGE-M3 requires `INSTALL_EMBEDDING_DEPS=1
 
 ## 5. Validate and start
 
+By default, Compose builds local images. For a published release, set `IPTV_PILOT_IMAGE=ghcr.io/karlazx/iptv-pilot` and set `APP_TAG` to the release version without the leading `v`.
+
 ```bash
 docker compose config --quiet
 docker compose build

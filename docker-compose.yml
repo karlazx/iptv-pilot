@@ -7,7 +7,7 @@ x-app-environment: &app-environment
   MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
 
 x-worker: &worker
-  image: iptv-pilot:${APP_TAG:-local}
+  image: ${IPTV_PILOT_IMAGE:-iptv-pilot}:${APP_TAG:-local}
   build:
     context: .
     dockerfile: Dockerfile
@@ -140,7 +140,7 @@ services:
       STREAM_QUALITY_WORKERS: ${STREAM_QUALITY_WORKERS:-3}
 
   live-normalizer:
-    image: iptv-pilot:${APP_TAG:-local}-live-normalizer
+    image: ${IPTV_PILOT_IMAGE:-iptv-pilot}:${APP_TAG:-local}-live-normalizer
     profiles: ["hardware-accel"]
     build:
       context: .
@@ -294,7 +294,7 @@ services:
 
   web:
     <<: *worker
-    image: iptv-pilot:${APP_TAG:-local}-web
+    image: ${IPTV_PILOT_IMAGE:-iptv-pilot}:${APP_TAG:-local}-web
     build:
       context: .
       dockerfile: Dockerfile
