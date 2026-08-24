@@ -12,7 +12,7 @@ license = "Apache-2.0"
 authors = [{ name = "karlazx", email = "karlaz.x@outlook.com" }]
 dependencies = [
   "APScheduler==3.11.0",
-  "fastapi==0.116.1",
+  "fastapi==0.141.1",
   "httpx==0.28.1",
   "openai==1.99.9",
   "pydantic==2.11.7",
