@@ -57,6 +57,7 @@ The default configuration is intended for a trusted private network. Do not expo
 - [Deployment guide](docs/deploy.md)
 - [REST API](docs/api.md)
 - [Architecture](docs/architecture.md)
+- [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 

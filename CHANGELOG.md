@@ -10,3 +10,4 @@ All notable changes to IPTVPilot will be documented in this file. The project fo
 - Removed private deployment reports, host addresses, and personal defaults.
 - Added automated tests and repository maintenance configuration.
 - Added automated GHCR image publishing, SBOM/provenance generation, and GitHub releases for semantic version tags.
+- Documented the post-v0.1 portability and ARM64 roadmap.
