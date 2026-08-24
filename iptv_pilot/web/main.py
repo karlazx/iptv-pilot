@@ -108,11 +108,11 @@ class TimeRule(BaseModel):
     @model_validator(mode="after")
     def validate_weekdays(self):
         if self.weekdays is not None and any(value < 0 or value > 6 for value in self.weekdays):
-            raise ValueError("weekdays values must be 0..6")
+            raise ValueError("星期值必须在 0 到 6 之间")
         try:
             ZoneInfo(self.timezone)
         except Exception as exc:
-            raise ValueError("invalid timezone") from exc
+            raise ValueError("时区无效") from exc
         return self
 
 
@@ -133,9 +133,9 @@ class SubscriptionCreate(BaseModel):
     @model_validator(mode="after")
     def validate_match(self):
         if self.match_type == "keyword" and not (self.keyword or "").strip():
-            raise ValueError("keyword is required")
+            raise ValueError("关键词不能为空")
         if self.match_type == "channel_time" and (not self.channel_id or not self.time_rule):
-            raise ValueError("channel_id and time_rule are required")
+            raise ValueError("频道和时间规则不能为空")
         return self
 
 
@@ -157,7 +157,7 @@ class SubscriptionUpdate(BaseModel):
 class ManualRecordingCreate(BaseModel):
     channel_id: str
     duration_sec: int = Field(default=30, ge=10, le=600)
-    program_title: str = Field(default="Manual recording", min_length=1, max_length=100)
+    program_title: str = Field(default="手工录制", min_length=1, max_length=100)
     asr_enabled: bool = True
     asr_model: Literal["tiny", "base", "small", "medium"] = "base"
     llm_enabled: bool = True
@@ -185,7 +185,7 @@ class ChannelAdminUpdate(BaseModel):
     def at_least_one(self):
         fields = self.model_fields_set
         if not any(key in fields for key in ("name_override", "category_override", "sort_weight", "disabled")):
-            raise ValueError("no channel admin fields provided")
+            raise ValueError("没有提供可更新的频道字段")
         return self
 
 
@@ -205,7 +205,7 @@ class ChannelCreate(BaseModel):
     def validate_url(self):
         parsed = urlparse(self.m3u_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("m3u_url must be an http(s) URL")
+            raise ValueError("直播地址必须是有效的 HTTP(S) URL")
         return self
 
 
@@ -220,7 +220,7 @@ class SourceCreate(BaseModel):
     def validate_url(self):
         parsed = urlparse(self.url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("url must be an http(s) URL")
+            raise ValueError("地址必须是有效的 HTTP(S) URL")
         return self
 
 
@@ -236,7 +236,7 @@ class SourceUpdate(BaseModel):
         if self.url is not None:
             parsed = urlparse(self.url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                raise ValueError("url must be an http(s) URL")
+                raise ValueError("地址必须是有效的 HTTP(S) URL")
         return self
 
 
@@ -264,7 +264,7 @@ def object_id(value: str) -> ObjectId:
     try:
         return ObjectId(value)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid ObjectId") from exc
+        raise HTTPException(status_code=400, detail="对象 ID 无效") from exc
 
 
 @app.middleware("http")
@@ -273,7 +273,7 @@ async def api_authentication(request: Request, call_next):
     if token and request.url.path.startswith("/api/"):
         supplied = request.headers.get("authorization", "")
         if not secrets.compare_digest(supplied, f"Bearer {token}"):
-            return JSONResponse(status_code=401, content={"detail": "invalid API token"})
+            return JSONResponse(status_code=401, content={"detail": "API 访问令牌无效"})
     return await call_next(request)
 
 
@@ -335,7 +335,7 @@ def enabled_channel(channel_id: str) -> dict:
         {"channel_id": channel_id, "enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}
     )
     if not channel:
-        raise HTTPException(status_code=404, detail="channel is not available for live viewing")
+        raise HTTPException(status_code=404, detail="该频道当前无法观看直播")
     return channel
 
 
@@ -358,7 +358,7 @@ def channels_admin() -> list[dict]:
 def update_channel_admin(channel_id: str, payload: ChannelAdminUpdate) -> dict:
     current = database.channels.find_one({"channel_id": channel_id})
     if not current:
-        raise HTTPException(status_code=404, detail="channel not found")
+        raise HTTPException(status_code=404, detail="频道不存在")
     update: dict[str, Any] = {}
     for key in ("name_override", "category_override", "sort_weight", "disabled"):
         if key in payload.model_fields_set:
@@ -390,7 +390,7 @@ def create_channel(payload: ChannelCreate) -> dict:
     if existing:
         raise HTTPException(
             status_code=409,
-            detail="channel_id already exists and would be overwritten by the next seed sync",
+            detail="频道 ID 已存在，并会在下次直播源同步时被覆盖",
         )
     document = payload.model_dump()
     document["source"] = "manual"
@@ -408,11 +408,11 @@ def create_channel(payload: ChannelCreate) -> dict:
 def delete_channel(channel_id: str) -> Response:
     current = database.channels.find_one({"channel_id": channel_id})
     if not current:
-        raise HTTPException(status_code=404, detail="channel not found")
+        raise HTTPException(status_code=404, detail="频道不存在")
     if current.get("source") == "iptv-api":
         raise HTTPException(
             status_code=409,
-            detail="seed 同步的内置频道不可删除，仅可禁用",
+            detail="直播源同步的频道不可删除，只能禁用",
         )
     active_subscriptions = database.subscriptions.count_documents(
         {"channel_id": channel_id, "enabled": True}, limit=1
@@ -434,7 +434,7 @@ def channel_detail(channel_id: str) -> dict:
         {"raw_m3u": 1, "stream_candidates": 1, "stream_quality": 1, "stream_manual": 1},
     )
     if not channel:
-        raise HTTPException(status_code=404, detail="channel not found")
+        raise HTTPException(status_code=404, detail="频道不存在")
     recordings = list(
         database.recordings.find(
             {"channel_id": channel_id}, {"file_path": 1, "start_time": 1, "status": 1, "program_title": 1, "duration_sec": 1}
@@ -532,7 +532,7 @@ def create_source(payload: SourceCreate) -> dict:
 def update_source(source_id: str, payload: SourceUpdate) -> dict:
     update = payload.model_dump(exclude_unset=True)
     if not update:
-        raise HTTPException(status_code=422, detail="no source fields provided")
+        raise HTTPException(status_code=422, detail="没有提供可更新的直播源字段")
     unset: dict[str, str] = {}
     if "channel_id" in update and update["channel_id"] is None:
         unset["channel_id"] = ""
@@ -545,7 +545,7 @@ def update_source(source_id: str, payload: SourceUpdate) -> dict:
         {"_id": object_id(source_id)}, operation, return_document=ReturnDocument.AFTER
     )
     if not result:
-        raise HTTPException(status_code=404, detail="source not found")
+        raise HTTPException(status_code=404, detail="直播源不存在")
     return serialize(result)
 
 
@@ -553,14 +553,14 @@ def update_source(source_id: str, payload: SourceUpdate) -> dict:
 def delete_source(source_id: str) -> Response:
     result = database.custom_sources.delete_one({"_id": object_id(source_id)})
     if not result.deleted_count:
-        raise HTTPException(status_code=404, detail="source not found")
+        raise HTTPException(status_code=404, detail="直播源不存在")
     return Response(status_code=204)
 
 
 async def _probe_source(url: str) -> dict:
     """Probe an HLS source: fetch playlist + first media segment, return status/size/elapsed."""
     if live_http_client is None:
-        raise HTTPException(status_code=503, detail="live proxy is not ready")
+        raise HTTPException(status_code=503, detail="直播代理尚未就绪")
     started = time_module.perf_counter()
     try:
         upstream = await open_live_response(live_http_client, url)
@@ -621,7 +621,7 @@ def channel_stream_options(channel_id: str) -> dict:
         {"m3u_url": 1, "stream_candidates": 1, "stream_quality": 1, "stream_manual": 1},
     )
     if not channel:
-        raise HTTPException(status_code=404, detail="channel not found")
+        raise HTTPException(status_code=404, detail="频道不存在")
     candidates = list(dict.fromkeys(channel.get("stream_candidates") or []))
     current_url = channel.get("m3u_url")
     if current_url and current_url not in candidates:
@@ -665,7 +665,7 @@ def select_channel_stream(channel_id: str, payload: StreamSelection) -> dict:
         {"m3u_url": 1, "stream_candidates": 1},
     )
     if not channel:
-        raise HTTPException(status_code=404, detail="channel not found")
+        raise HTTPException(status_code=404, detail="频道不存在")
     candidates = list(dict.fromkeys(channel.get("stream_candidates") or []))
     current_url = channel.get("m3u_url")
     if current_url and current_url not in candidates:
@@ -674,7 +674,7 @@ def select_channel_stream(channel_id: str, payload: StreamSelection) -> dict:
         update: dict[str, Any] = {"$unset": {"stream_manual": ""}}
     else:
         if payload.index < 0 or payload.index >= len(candidates):
-            raise HTTPException(status_code=400, detail="stream index out of range")
+            raise HTTPException(status_code=400, detail="直播线路序号超出范围")
         update = {
             "$set": {
                 "m3u_url": candidates[payload.index],
@@ -687,7 +687,7 @@ def select_channel_stream(channel_id: str, payload: StreamSelection) -> dict:
 
 async def live_response(url: str) -> Response:
     if live_http_client is None:
-        raise HTTPException(status_code=503, detail="live proxy is not ready")
+        raise HTTPException(status_code=503, detail="直播代理尚未就绪")
     try:
         upstream = await open_live_response(live_http_client, url)
     except LiveProxyError as exc:
@@ -699,7 +699,7 @@ async def live_response(url: str) -> Response:
         except LiveProxyError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if not content.lstrip().startswith(b"#EXTM3U"):
-            raise HTTPException(status_code=502, detail="live stream upstream returned an invalid HLS playlist")
+            raise HTTPException(status_code=502, detail="上游直播源返回了无效的 HLS 播放列表")
         rewritten = rewrite_hls_manifest(
             content.decode("utf-8", errors="replace"), str(upstream.url), live_signer
         ).encode()
@@ -758,12 +758,12 @@ async def watch_live_channel(channel_id: str) -> Response:
 @app.get("/api/channels/{channel_id}/normalized/{filename}")
 def normalized_live_segment(channel_id: str, filename: str) -> Response:
     if channel_id not in normalized_channels or Path(filename).name != filename:
-        raise HTTPException(status_code=404, detail="normalized live segment not found")
+        raise HTTPException(status_code=404, detail="规范化直播分片不存在")
     if not filename.endswith(".ts"):
-        raise HTTPException(status_code=404, detail="normalized live segment not found")
+        raise HTTPException(status_code=404, detail="规范化直播分片不存在")
     path = channel_cache_directory(normalized_live_root, channel_id) / filename
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="normalized live segment not found")
+        raise HTTPException(status_code=404, detail="规范化直播分片不存在")
     return FileResponse(
         path,
         media_type="video/mp2t",
@@ -831,7 +831,7 @@ def summaries(target_date: date = Query(alias="date")) -> list[dict]:
 def summary_detail(summary_id: str) -> dict:
     summary = database.summaries.find_one({"_id": object_id(summary_id)}, {"embedding": 0})
     if not summary:
-        raise HTTPException(status_code=404, detail="summary not found")
+        raise HTTPException(status_code=404, detail="节目摘要不存在")
     transcript = database.transcripts.find_one({"_id": summary.get("transcript_id")}, {"embedding": 0})
     return serialize({**summary, "transcript": transcript})
 
@@ -888,7 +888,7 @@ def ensure_enabled_channel(channel_id: str) -> None:
     if not database.channels.find_one(
         {"channel_id": channel_id, "enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}
     ):
-        raise HTTPException(status_code=422, detail="channel_id is not an enabled stream")
+        raise HTTPException(status_code=422, detail="所选频道不是已启用的直播频道")
 
 
 @app.post("/api/subscriptions", status_code=201)
@@ -910,10 +910,10 @@ def subscriptions() -> list[dict]:
 def update_subscription(subscription_id: str, payload: SubscriptionUpdate) -> dict:
     current = database.subscriptions.find_one({"_id": object_id(subscription_id)})
     if not current:
-        raise HTTPException(status_code=404, detail="subscription not found")
+        raise HTTPException(status_code=404, detail="订阅不存在")
     update = payload.model_dump(exclude_unset=True)
     if not update:
-        raise HTTPException(status_code=422, detail="no supported fields")
+        raise HTTPException(status_code=422, detail="没有提供可更新的订阅字段")
     merged = {key: current.get(key) for key in SubscriptionCreate.model_fields}
     merged.update(update)
     validated = SubscriptionCreate.model_validate(merged).model_dump()
@@ -934,7 +934,7 @@ def delete_subscription(subscription_id: str) -> Response:
         {"$set": {"enabled": False, "updated_at": datetime.now(UTC)}},
     )
     if not result.matched_count:
-        raise HTTPException(status_code=404, detail="subscription not found")
+        raise HTTPException(status_code=404, detail="订阅不存在")
     return Response(status_code=204)
 
 
@@ -974,7 +974,7 @@ def create_manual_recording(payload: ManualRecordingCreate) -> dict:
 def recording_detail(recording_id: str) -> dict:
     recording = database.recordings.find_one({"_id": object_id(recording_id)})
     if not recording:
-        raise HTTPException(status_code=404, detail="recording not found")
+        raise HTTPException(status_code=404, detail="录制任务不存在")
     transcript = database.transcripts.find_one(
         {"recording_id": recording["_id"]}, {"embedding": 0, "segments": 0}
     )
@@ -997,9 +997,9 @@ def recording_detail(recording_id: str) -> dict:
 def media_recording(recording_id: str) -> dict:
     recording = database.recordings.find_one({"_id": object_id(recording_id)})
     if not recording:
-        raise HTTPException(status_code=404, detail="recording not found")
+        raise HTTPException(status_code=404, detail="录制任务不存在")
     if recording.get("status") in {"queued", "recording"}:
-        raise HTTPException(status_code=409, detail="recording is not complete")
+        raise HTTPException(status_code=409, detail="录制任务尚未完成")
     return recording
 
 
@@ -1016,9 +1016,9 @@ def play_recording(recording_id: str) -> FileResponse:
             timeout_seconds=int(os.getenv("MEDIA_REMUX_TIMEOUT_SECONDS", "300")),
         )
     except MediaNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="recording media is unavailable") from exc
+        raise HTTPException(status_code=404, detail="录制媒体不可用") from exc
     except MediaPathError as exc:
-        raise HTTPException(status_code=404, detail="recording media is unavailable") from exc
+        raise HTTPException(status_code=404, detail="录制媒体不可用") from exc
     except MediaPreparationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return FileResponse(
@@ -1038,7 +1038,7 @@ def download_recording(recording_id: str) -> FileResponse:
             recording, Path(os.getenv("RECORDINGS_ROOT", "/data/recordings"))
         )
     except (MediaNotFoundError, MediaPathError) as exc:
-        raise HTTPException(status_code=404, detail="recording media is unavailable") from exc
+        raise HTTPException(status_code=404, detail="录制媒体不可用") from exc
     suffix = source.suffix.lower() or ".bin"
     return FileResponse(
         source,
@@ -1153,7 +1153,7 @@ def bookmarks(user: str = "default") -> list[dict]:
 def delete_bookmark(bookmark_id: str) -> Response:
     result = database.bookmarks.delete_one({"_id": object_id(bookmark_id)})
     if not result.deleted_count:
-        raise HTTPException(status_code=404, detail="bookmark not found")
+        raise HTTPException(status_code=404, detail="收藏不存在")
     return Response(status_code=204)
 
 

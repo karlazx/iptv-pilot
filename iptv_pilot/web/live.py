@@ -60,7 +60,7 @@ class LiveTokenSigner:
                 raise ValueError("unsupported scheme")
             return url
         except Exception as exc:
-            raise LiveProxyError("invalid or expired live stream token") from exc
+            raise LiveProxyError("直播访问令牌无效或已过期") from exc
 
 
 URI_ATTRIBUTE = re.compile(r'URI="([^"]+)"')
@@ -112,12 +112,12 @@ async def open_live_response(client: httpx.AsyncClient, url: str) -> httpx.Respo
         content_length = int(response.headers.get("content-length", "0") or 0)
         if content_length > MAXIMUM_LIVE_ASSET_BYTES:
             await response.aclose()
-            raise LiveProxyError("live stream segment exceeds proxy limit")
+            raise LiveProxyError("直播分片超过代理大小限制")
         return response
     except LiveProxyError:
         raise
     except (httpx.HTTPError, ValueError) as exc:
-        raise LiveProxyError("live stream upstream is unavailable") from exc
+        raise LiveProxyError("上游直播源不可用") from exc
 
 
 async def read_live_response(response: httpx.Response) -> bytes:
@@ -126,7 +126,7 @@ async def read_live_response(response: httpx.Response) -> bytes:
     finally:
         await response.aclose()
     if len(content) > MAXIMUM_LIVE_ASSET_BYTES:
-        raise LiveProxyError("live stream segment exceeds proxy limit")
+        raise LiveProxyError("直播分片超过代理大小限制")
     return content
 
 
@@ -152,7 +152,7 @@ async def fetch_live_asset(
         or urlparse(final_url).path.lower().endswith((".m3u8", ".m3u"))
     )
     if declared_playlist and not has_playlist_header:
-        raise LiveProxyError("live stream upstream returned an invalid HLS playlist")
+        raise LiveProxyError("上游直播源返回了无效的 HLS 播放列表")
     playlist = has_playlist_header
     if playlist:
         media_type = "application/vnd.apple.mpegurl"

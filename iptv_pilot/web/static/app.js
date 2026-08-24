@@ -14,14 +14,14 @@ const appState = {
 };
 
 const routeMeta = {
-  epg: ["节目单", "CHANNELS & EPG"],
-  channels: ["频道管理", "CHANNEL ADMIN"],
-  sources: ["直播源", "STREAM SOURCES"],
-  subscriptions: ["我的订阅", "SUBSCRIPTIONS"],
-  recordings: ["录制与处理", "RECORDINGS"],
-  summaries: ["节目摘要", "AI SUMMARIES"],
-  bookmarks: ["我的收藏", "BOOKMARKS"],
-  system: ["通用设置", "SETTINGS"],
+  epg: ["节目单", "频道与节目单"],
+  channels: ["频道管理", "管理频道"],
+  sources: ["直播源", "管理直播线路"],
+  subscriptions: ["我的订阅", "订阅规则"],
+  recordings: ["录制与处理", "录制任务"],
+  summaries: ["节目摘要", "智能摘要"],
+  bookmarks: ["我的收藏", "收藏内容"],
+  system: ["通用设置", "系统设置"],
 };
 
 const statusMeta = {
