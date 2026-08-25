@@ -1,5 +1,9 @@
 # IPTVPilot
 
+[![CI](https://github.com/karlazx/iptv-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/karlazx/iptv-pilot/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/karlazx/iptv-pilot)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-linux%2Famd64-blue)](ROADMAP.md)
+
 > Smart IPTV subscriptions, channel management, and program digests.
 
 IPTVPilot 是一套面向可信家庭内网的自托管 IPTV 智能管家，通过 Docker Compose 将频道与节目单管理、预约录制、浏览器播放、语音转写、AI 节目摘要和邮件通知整合在一起。
