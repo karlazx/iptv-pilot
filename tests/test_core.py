@@ -1,9 +1,11 @@
 import os
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import version
 
 import pytest
 from pydantic import ValidationError
 
+from iptv_pilot import __version__
 from iptv_pilot.epg_engine.main import iter_xmltv, parse_xmltv_time
 from iptv_pilot.live_normalizer.main import (
     ffmpeg_command,
@@ -17,6 +19,10 @@ from iptv_pilot.scheduler.main import matches
 from iptv_pilot.web.live import LiveProxyError, LiveTokenSigner, rewrite_hls_manifest
 from iptv_pilot.web.main import SubscriptionCreate, TimeRule
 from scripts.refresh_stream_quality import preferred_index, should_switch
+
+
+def test_package_version_matches_metadata():
+    assert __version__ == version("iptv-pilot")
 
 
 def test_parse_xmltv_time_with_offset():

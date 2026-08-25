@@ -83,11 +83,11 @@ ruff check .
 
 Python 包名为 `iptv_pilot`。Docker 镜像统一使用 `iptv-pilot` 仓库名，Compose 通过不同 tag 区分默认、Web 和直播规范化变体。
 
-发布版本会将带 SBOM 和构建来源证明的镜像推送到 `ghcr.io/karlazx/iptv-pilot`。使用已发布镜像时，在 `.env` 中设置：
+发布版本会将带 SBOM 和构建来源证明的镜像推送到 `ghcr.io/karlazx/iptv-pilot`。当前首个候选版本使用：
 
 ```dotenv
 IPTV_PILOT_IMAGE=ghcr.io/karlazx/iptv-pilot
-APP_TAG=0.1.0
+APP_TAG=0.1.0-rc.1
 ```
 
 Compose 仍保留本地构建定义，用户可以自行构建全部镜像。
