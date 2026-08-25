@@ -43,8 +43,7 @@ cp .env.example .env
 
 1. 替换 `IPTV_DB_PASSWORD`、`MONGOT_PASSWORD`，并同步修改 `MONGODB_URI` 中的密码。
 2. 将所有 `/nas/iptv/...` 存储路径改为主机上的实际目录。
-3. 配置自己的 EPG 和 IPTV 源文件。
-4. 配置 LLM 服务；仅做本地功能检查时可保留默认的 `LLM_PROVIDER=mock`。
+3. 配置 LLM 服务；仅做本地功能检查时可保留默认的 `LLM_PROVIDER=mock`。
 
 启动服务：
 
@@ -56,11 +55,14 @@ docker compose ps
 
 打开 `http://你的_NAS_IP:5190`。配套的 iptv-api 服务默认使用端口 `5181`。
 
+全新部署显示 0 个频道是预期状态。最快的验证方式是在“系统设置 → 频道管理”点击“添加频道”，填入一个自有或已获授权的 HLS 地址；已有频道清单或 M3U/TXT 订阅时，可使用批量导入助手。完整步骤见[首次添加直播源](docs/live-sources.md)。
+
 默认配置仅适用于可信内网，不要将管理台或 iptv-api 直接暴露到公网。部署边界详见[安全政策](SECURITY.md)。
 
 ## 文档
 
 - [部署指南](docs/deploy.md)
+- [首次添加直播源](docs/live-sources.md)
 - [REST API](docs/api.md)
 - [系统架构](docs/architecture.md)
 - [项目路线图](ROADMAP.md)

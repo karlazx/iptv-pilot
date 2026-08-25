@@ -853,7 +853,11 @@ async function renderChannelsAdmin() {
         <td>${disabled ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</td>
         <td><div class="table-actions"><button class="button small secondary" data-admin-edit="${esc(row.channel_id)}">编辑</button><button class="button small ghost" data-admin-detail="${esc(row.channel_id)}">详情</button><button class="button small ${disabled ? "secondary" : "danger"}" data-admin-toggle="${esc(row.channel_id)}">${disabled ? "启用" : "禁用"}</button>${deletable ? `<button class="button small danger" data-admin-delete="${esc(row.channel_id)}">删除</button>` : ""}</div></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="7">${emptyState("没有频道", "当前筛选条件下没有频道。", true)}</td></tr>`;
+    }).join("") : `<tr><td colspan="7">${emptyState(
+      "没有频道",
+      channels.length ? "当前筛选条件下没有频道。" : "首次使用可点击上方“添加频道”；批量导入请查看部署文档。",
+      true,
+    )}</td></tr>`;
   };
   renderRows();
   $("#admin-category-filter").addEventListener("change", renderRows);
@@ -996,7 +1000,11 @@ async function renderSources() {
         <td>${custom ? '<span class="badge warning">自定义</span>' : '<span class="badge info">内置</span>'}</td>
         <td><div class="table-actions"><button class="button small ghost" data-source-test="${esc(row.url)}" data-source-name="${esc(row.name || row.channel_id || host)}">测试</button>${custom ? `<button class="button small secondary" data-source-edit="${esc(row._id)}">编辑</button><button class="button small danger" data-source-delete="${esc(row._id)}">删除</button>` : ""}</div></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6">${emptyState("暂无线路", "当前筛选条件下没有线路。", true)}</td></tr>`;
+    }).join("") : `<tr><td colspan="6">${emptyState(
+      "暂无线路",
+      data.sources.length ? "当前筛选条件下没有线路。" : "先在频道管理添加首个频道，或按部署文档批量导入；备用线路可在这里新增并绑定频道。",
+      true,
+    )}</td></tr>`;
   };
   renderRows();
   $("#source-type-filter").addEventListener("change", renderRows);

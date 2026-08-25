@@ -38,17 +38,9 @@ MONGODB_URI=mongodb://iptv_user:使用随机长密码@mongodb:27017/iptv_pilot?a
 
 ## 3. 配置 IPTV 与 EPG
 
-仓库不包含可工作的频道、订阅或第三方 EPG 地址。请复制 `config/iptv-api/` 下的模板，并只添加你有权使用的源。
+仓库不包含可工作的频道、订阅或第三方 EPG 地址，全新部署显示 0 个频道是预期状态。只使用自有或已获授权的源。
 
-初始化 iptv-api 持久化配置目录后，可安装用户自己的文件：
-
-```bash
-python3 scripts/configure_iptv_api.py "$IPTV_API_CONFIG_PATH" .env \
-  --channels-file /path/to/my-channels.txt \
-  --subscriptions-file /path/to/my-subscriptions.txt
-```
-
-两个文件参数均可省略。脚本始终更新 `IPTV_API_CONFIG_PATH`；提供文件时，会将其安装到持久化的 iptv-api 配置目录。
+批量导入前必须先启动一次 `iptv-api`，让它初始化完整的持久化配置；不要在首次启动前直接运行配置脚本。可先复制 `config/iptv-api/` 中的注释模板到仓库外的私有目录，实际导入步骤放在第 6 节。
 
 `EPG_URLS` 接受逗号分隔的降级列表。默认只使用共享 M3U 目录中的本地 XMLTV 文件：
 
@@ -103,7 +95,13 @@ docker compose exec mongodb mongosh --quiet --eval 'rs.status().ok'
 docker compose exec mongodb mongosh --quiet --eval 'db.getSiblingDB("iptv_pilot").channels.countDocuments()'
 ```
 
-## 6. 直播规范化服务
+## 6. 首次添加直播源
+
+推荐先通过管理台添加一个频道，确认播放链路；需要导入自建频道清单或授权 M3U/TXT 订阅时，使用容器化导入助手。该助手兼容 `iptv-api` 首次初始化后配置目录归 `root` 所有的情况，无需递归修改 NAS 目录权限。
+
+完整的手动添加、批量导入、EPG 配置、验证与排错步骤见[首次添加直播源](live-sources.md)。
+
+## 7. 直播规范化服务
 
 可选的 `live-normalizer` 服务使用 Intel VAAPI，并映射 `/dev/dri/renderD128`。默认启动不会包含该服务，其他频道继续使用普通同源代理。
 
@@ -120,7 +118,7 @@ LIVE_NORMALIZE_MAX_CHANNELS=1
 docker compose --profile hardware-accel up -d --build
 ```
 
-## 7. 内网使用边界
+## 8. 内网使用边界
 
 默认部署面向可信局域网，不强制设置 `WEB_API_TOKEN`。请勿在公网路由器上转发 5190 或 5181 端口。
 
@@ -128,7 +126,7 @@ docker compose --profile hardware-accel up -d --build
 
 MongoDB 和 MongoDB Search 端口不得发布到宿主机或公网。
 
-## 8. 备份与清理
+## 9. 备份与清理
 
 执行数据库备份：
 
@@ -144,7 +142,7 @@ docker compose --profile maintenance run --rm cleanup-recordings
 
 应先完成一次手工备份和恢复演练，再配置计划任务。数据库备份不包含录像文件，录像需要独立的存储备份策略。
 
-## 9. 升级流程
+## 10. 升级流程
 
 项目为基础镜像和配套服务提供了固定的默认版本，避免 `latest` 在无人确认时引入不兼容改动。尤其是 iptv-api 3.x 包含配置变化，升级前应先阅读其发布说明并在独立环境验证。
 
