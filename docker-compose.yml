@@ -5,6 +5,11 @@ x-app-environment: &app-environment
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0}
   MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
+  # Static ffmpeg builds (imageio-ffmpeg / johnvansickle) bundle their own glibc
+  # but load the host image's gconv modules for DVB charset conversion.  On
+  # Debian 12 the glibc 2.36 modules are ABI-incompatible and SIGSEGV while
+  # parsing the MPEG-TS SDT; an empty GCONV_PATH makes iconv fail gracefully.
+  GCONV_PATH: /nonexistent
 
 x-worker: &worker
   image: ${IPTV_PILOT_IMAGE:-iptv-pilot}:${APP_TAG:-local}
@@ -300,7 +305,7 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_AI_DEPS: 0
-        INSTALL_FFMPEG: 0
+        INSTALL_FFMPEG: 1
         INSTALL_SYSTEM_FFMPEG: 0
         INSTALL_EMBEDDING_DEPS: 0
         PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.org/simple}
