@@ -34,7 +34,7 @@ x-worker: &worker
 x-ai-worker: &ai-worker
   <<: *worker
   image: ${IPTV_PILOT_AI_IMAGE:-iptv-pilot-ai}:${IPTV_PILOT_AI_TAG:-local}
-  pull_policy: never
+  pull_policy: ${IPTV_PILOT_AI_PULL_POLICY:-never}
   build:
     context: .
     dockerfile: Dockerfile
@@ -315,7 +315,7 @@ services:
   web:
     <<: *worker
     image: ${IPTV_PILOT_WEB_IMAGE:-iptv-pilot-web}:${IPTV_PILOT_WEB_TAG:-local}
-    pull_policy: never
+    pull_policy: ${IPTV_PILOT_WEB_PULL_POLICY:-never}
     build:
       context: .
       dockerfile: Dockerfile
