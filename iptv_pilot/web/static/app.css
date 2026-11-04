@@ -109,6 +109,12 @@ a { color: inherit; }
 .checks { display: flex; flex-wrap: wrap; gap: 10px 16px; }
 .check { display: inline-flex; align-items: center; gap: 7px; color: #3c485b; font-size: 13px; }
 .check input { width: 17px; height: 17px; accent-color: var(--primary); }
+.inline-checks { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 6px 0; }
+.inline-checks label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #3c485b; }
+.inline-checks input { width: 16px; height: 16px; accent-color: var(--primary); }
+.form-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.data-table td small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+.data-table td small.danger { color: #b42318; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; margin-bottom: 18px; }
 .stat-card { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(145deg,#fff,#fafbfe); }

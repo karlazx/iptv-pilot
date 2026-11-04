@@ -339,36 +339,13 @@ def run_channel(channel_id: str) -> None:
         while not STOP:
             channel = database.channels.find_one(
                 {"channel_id": channel_id, "enabled": True},
-                {"m3u_url": 1, "stream_candidates": 1, "stream_manual": 1},
+                {"m3u_url": 1, "active_source_id": 1},
             ) or {}
             current_url = channel.get("m3u_url")
             if pacer.failed.is_set():
                 LOG.error("restarting invalid normalized stream: %s", pacer.failure_reason)
-                candidates = channel.get("stream_candidates") or []
-                if channel.get("stream_manual") and len(candidates) > 1:
-                    current_index = next(
-                        (index for index, url in enumerate(candidates) if url == current_url),
-                        None,
-                    )
-                    if current_index is not None:
-                        next_index = (current_index + 1) % len(candidates)
-                        database.channels.update_one(
-                            {"channel_id": channel_id},
-                            {
-                                "$set": {"m3u_url": candidates[next_index]},
-                                "$unset": {"stream_manual": ""},
-                            },
-                        )
-                        LOG.warning(
-                            "manual override cleared and failed line switched channel=%s next_candidate=%s",
-                            channel_id,
-                            next_index,
-                        )
-                        channel = database.channels.find_one(
-                            {"channel_id": channel_id, "enabled": True},
-                            {"m3u_url": 1, "stream_candidates": 1, "stream_manual": 1},
-                        ) or {}
-                        current_url = channel.get("m3u_url")
+                # Source selection is owned by the resolver; the normalizer only
+                # reports health so it can never replace a locked primary.
             output_stale = (
                 manifest.exists()
                 and time.time() - manifest.stat().st_mtime > stale_seconds
@@ -418,11 +395,6 @@ def run_channel(channel_id: str) -> None:
             now = time.monotonic()
             if source_url and now >= next_quality_update:
                 timing = segment_timing(directory)
-                candidates = channel.get("stream_candidates") or []
-                source_index = next(
-                    (index for index, candidate in enumerate(candidates) if candidate == source_url),
-                    None,
-                )
                 decode_healthy = bool(
                     decoder_stats["pps_errors"] == 0
                     and decoder_stats["no_frame_errors"] == 0
@@ -438,7 +410,7 @@ def run_channel(channel_id: str) -> None:
                         "$set": {
                             "normalizer_quality": {
                                 "measured_at": datetime.now(UTC),
-                                "source_index": source_index,
+                                "source_id": channel.get("active_source_id"),
                                 "source_host": urlparse(source_url).netloc,
                                 # Source selection prioritizes whether frames
                                 # can be decoded. Publication jitter is stored
