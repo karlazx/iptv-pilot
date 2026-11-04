@@ -4,6 +4,15 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 
 ## 尚未发布
 
+## 0.1.0-rc.2 - 2026-11-04
+
+- 录制增加实际媒体时长校验：实际时长显著短于请求窗口时判失败并重试，避免把早退片段当完整录像。
+- 录制 ffmpeg 增加 HTTP 自动重连参数。
+- 修复 Debian 12 上静态 ffmpeg 解析 MPEG-TS SDT 时的 gconv/iconv SIGSEGV（通过 `GCONV_PATH` 禁用不兼容模块）。
+- 新增 `-ai` 镜像变体，ASR/recorder 使用独立 AI 镜像并固定 `av==18.1.0`，避免基础镜像更新移除 faster-whisper/PyAV。
+- Web 镜像启用 imageio-ffmpeg，支持浏览器内播放录像；新增可配置的本地/registry 镜像 tag 与 pull policy。
+- 增加录制早退检测单元测试，并更新部署文档。
+
 ## 0.1.0-rc.1 - 2026-08-25
 
 - 项目更名为 IPTVPilot，Python 包名改为 `iptv_pilot`。
