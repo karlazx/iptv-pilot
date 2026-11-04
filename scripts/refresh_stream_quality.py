@@ -90,7 +90,6 @@ def run_once(sample_count: int, timeout: float, workers: int) -> tuple[int, int]
         ordered_sources,
         policy_for_channel,
         resolve_active,
-        resolve_preferred,
     )
 
     database = connect_database()
@@ -136,7 +135,6 @@ def run_once(sample_count: int, timeout: float, workers: int) -> tuple[int, int]
             if not ordered:
                 continue
             results = results[: len(ordered)]
-            preferred = resolve_preferred(sources, channel)
             active = resolve_active(sources, channel)
             runtime_quality = channel.get("normalizer_quality") or {}
             runtime_source_id = runtime_quality.get("source_id")
