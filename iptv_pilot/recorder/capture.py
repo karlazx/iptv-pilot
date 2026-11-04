@@ -12,9 +12,6 @@ import av
 def capture(source_url: str, output_path: Path, duration_seconds: int) -> None:
     input_options = {
         "rw_timeout": "15000000",
-        "reconnect": "1",
-        "reconnect_streamed": "1",
-        "reconnect_delay_max": "5",
     }
     source = av.open(source_url, mode="r", options=input_options)
     output = av.open(str(output_path), mode="w", format="mpegts")

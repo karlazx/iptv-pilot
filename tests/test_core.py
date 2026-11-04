@@ -15,6 +15,7 @@ from iptv_pilot.live_normalizer.main import (
 )
 from iptv_pilot.llm.providers import MockProvider, validate_summary
 from iptv_pilot.recorder.main import (
+    _capture_with_ffmpeg,
     _validate_captured_duration,
     capture_stream,
     safe_name,
@@ -73,6 +74,21 @@ def test_recording_duration_skips_short_windows(monkeypatch, tmp_path):
 def test_recording_duration_skips_unprobeable(monkeypatch, tmp_path):
     monkeypatch.setattr("iptv_pilot.recorder.main.probe_media_duration", lambda _path: None)
     assert _validate_captured_duration(tmp_path / "x.ts", 600) is None
+
+
+def test_ffmpeg_capture_uses_read_timeout_without_unbounded_reconnect(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+
+    monkeypatch.setattr("iptv_pilot.recorder.main._ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr("iptv_pilot.recorder.main.subprocess.run", fake_run)
+    _capture_with_ffmpeg("http://example.test/live.m3u8", tmp_path / "out.ts", 10)
+    command = captured["command"]
+    assert "-rw_timeout" in command
+    assert "15000000" in command
+    assert "-reconnect" not in command
 
 
 def test_recorder_falls_back_to_pyav(monkeypatch, tmp_path):
