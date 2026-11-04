@@ -28,6 +28,13 @@ jobs:
               INSTALL_FFMPEG=1
               INSTALL_SYSTEM_FFMPEG=0
               INSTALL_EMBEDDING_DEPS=0
+          - variant: ai
+            suffix: -ai
+            build_args: |
+              INSTALL_AI_DEPS=1
+              INSTALL_FFMPEG=1
+              INSTALL_SYSTEM_FFMPEG=0
+              INSTALL_EMBEDDING_DEPS=0
           - variant: web
             suffix: -web
             build_args: |
