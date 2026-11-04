@@ -314,7 +314,8 @@ services:
 
   web:
     <<: *worker
-    image: ${IPTV_PILOT_IMAGE:-iptv-pilot}:${APP_TAG:-local}-web
+    image: ${IPTV_PILOT_WEB_IMAGE:-iptv-pilot-web}:${IPTV_PILOT_WEB_TAG:-local}
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile

@@ -82,6 +82,22 @@ ASR_BACKEND=faster_whisper
 
 模型体积较大，第一次转写也会更慢；可通过 `MODELS_PATH` 复用本地 Hugging Face 缓存，并用 `HF_HUB_OFFLINE=1` 避免联网检查。使用已发布的 AI 镜像时，设置 `IPTV_PILOT_AI_IMAGE=ghcr.io/karlazx/iptv-pilot`、`IPTV_PILOT_AI_TAG=<版本>-ai`。
 
+Web 播放镜像同样默认使用本地镜像并设置 `pull_policy: never`，避免 `docker compose pull` 覆盖掉带 ffmpeg 的播放镜像：
+
+```dotenv
+IPTV_PILOT_WEB_IMAGE=iptv-pilot-web
+IPTV_PILOT_WEB_TAG=local
+```
+
+构建 Web 镜像：
+
+```bash
+docker compose build web
+docker compose up -d web
+```
+
+使用已发布的 Web 镜像时，设置 `IPTV_PILOT_WEB_IMAGE=ghcr.io/karlazx/iptv-pilot`、`IPTV_PILOT_WEB_TAG=<版本>-web`。
+
 需要生成真实摘要时，配置任一受支持的 LLM Provider 及其 API Key。OpenAI 兼容的自定义服务使用 `LLM_PROVIDER=custom`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。
 
 向量搜索默认关闭。启用 BGE-M3 需要设置 `INSTALL_EMBEDDING_DEPS=1`，会增加镜像构建时间、模型磁盘占用和运行内存。
