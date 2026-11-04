@@ -719,30 +719,37 @@ function openLivePlayer(channelId, title) {
     const badge = $("#stream-badge");
     try {
       const data = await api(`/api/channels/${encodeURIComponent(channelId)}/streams`);
-      const candidates = data.candidates || [];
-      if (!candidates.length) {
+      const sources = data.sources || [];
+      if (!sources.length) {
         badge.textContent = "单线路";
-        select.innerHTML = '<option value="auto" selected>自动（系统优选）</option>';
+        select.innerHTML = '<option value="" selected>仅有一条线路</option>';
         picker.hidden = false;
         return;
       }
-      const current = data.current_index;
-      select.innerHTML = '<option value="auto">自动（系统优选）</option>' + candidates.map(item => {
-        const label = `线路 ${item.index + 1} · ${esc(item.host)}${streamQualityLabel(item.quality)}`;
-        const selected = !data.manual && item.index === current;
-        return `<option value="${item.index}" ${selected ? "selected" : ""}>${label}</option>`;
+      const activeId = data.active_source_id;
+      const kindLabel = item => SOURCE_KIND_LABELS[item.kind] || "线路";
+      select.innerHTML = sources.map(item => {
+        const marks = [];
+        if (item.preferred) marks.push("首选");
+        if (item.locked) marks.push("已锁定");
+        const suffix = marks.length ? ` · ${marks.join(" / ")}` : "";
+        return `<option value="${esc(item.source_id)}" ${item.source_id === activeId ? "selected" : ""}>${esc(kindLabel(item))} ${esc(item.label || item.host || "线路")}${suffix}${streamQualityLabel(item.quality)}</option>`;
       }).join("");
       select.disabled = false;
-      badge.textContent = data.manual ? "手动" : "自动";
+      const fallback = data.active_state === "fallback";
+      badge.textContent = data.policy === "manual" ? "手动" : fallback ? "已回退" : "首选";
+      badge.className = fallback ? "badge warning" : "badge info";
       picker.hidden = false;
       select.addEventListener("change", async () => {
-        const value = select.value;
-        const index = value === "auto" ? null : Number(value);
+        const sourceId = select.value;
+        if (!sourceId || sourceId === activeId) return;
         select.disabled = true;
         try {
-          await api(`/api/channels/${encodeURIComponent(channelId)}/stream`, { method: "POST", body: { index } });
-          badge.textContent = index === null ? "自动" : "手动";
-          toast(index === null ? "已切回自动优选，正在重连" : "已切换线路，正在重连");
+          await api(`/api/channels/${encodeURIComponent(channelId)}/source`, {
+            method: "POST",
+            body: { source_id: sourceId, mode: "temporary" },
+          });
+          toast("已临时切换线路，正在重连；首选源不会被替换");
           connect(false);
         } catch (error) {
           toast(error.message, "error");
@@ -848,7 +855,7 @@ async function renderChannelsAdmin() {
         <td><input type="checkbox" class="admin-check" data-channel-id="${esc(row.channel_id)}"></td>
         <td><strong>${esc(row.name)}</strong><small>${esc(row.channel_id)}${row.name_override ? " · 已改名" : ""}${row.category_override ? " · 已改分类" : ""}</small></td>
         <td>${esc(row.category)}</td>
-        <td>${row.stream_count || 0}</td>
+        <td>${row.stream_count || 0}${row.active_state === "fallback" ? ' <span class="badge warning">回退中</span>' : row.source_locked ? ' <span class="badge info">首选锁定</span>' : ""}</td>
         <td>${row.sort_weight ?? "—"}</td>
         <td>${disabled ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</td>
         <td><div class="table-actions"><button class="button small secondary" data-admin-edit="${esc(row.channel_id)}">编辑</button><button class="button small ghost" data-admin-detail="${esc(row.channel_id)}">详情</button><button class="button small ${disabled ? "secondary" : "danger"}" data-admin-toggle="${esc(row.channel_id)}">${disabled ? "启用" : "禁用"}</button>${deletable ? `<button class="button small danger" data-admin-delete="${esc(row.channel_id)}">删除</button>` : ""}</div></td>
@@ -974,65 +981,160 @@ async function openChannelDetail(channelId) {
   } catch (error) { $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
 }
 
+const SOURCE_KIND_LABELS = {
+  udpxy: "组播",
+  m3u: "HLS",
+  custom: "自定义",
+  backup_m3u: "备用M3U",
+  legacy: "旧线路",
+};
+
 async function renderSources() {
   const [data, channels] = await Promise.all([api("/api/sources"), loadChannels()]);
   const summary = data.m3u_summary || {};
+  const grouped = new Map();
+  for (const row of data.sources || []) {
+    if (!row.channel_id) continue;
+    if (!grouped.has(row.channel_id)) grouped.set(row.channel_id, []);
+    grouped.get(row.channel_id).push(row);
+  }
+  for (const rows of grouped.values()) {
+    rows.sort((a, b) => (a.priority || 0) - (b.priority || 0));
+  }
+  const unbound = data.unbound || [];
   $("#view").innerHTML = `
-    ${pageIntro("管理直播线路。内置源来自 iptv-api 每日同步（只读），自定义源可自由增删改查。", '<button class="button" id="source-new" type="button">＋ 新增自定义源</button>')}
+    ${pageIntro("管理直播线路。首选源已锁定，不会被 M3U 同步、质量刷新或规范化服务替换；首选不可用时会自动回退到备用源，恢复后自动切回。", '<button class="button" id="source-new" type="button">＋ 新增备用源</button><button class="button secondary" id="source-import" type="button">导入备用 M3U</button>')}
     <div class="toolbar">
-      <label class="field"><span>来源类型</span><select class="select" id="source-type-filter"><option value="">全部</option><option value="seed">内置</option><option value="custom">自定义</option></select></label>
-      <div class="grow"></div><span class="badge" id="source-count">${data.sources.length} 条线路</span>
+      <label class="field grow"><span>筛选频道</span><input class="input" id="source-filter" placeholder="按频道名称或 ID 搜索"></label>
+      <span class="badge" id="source-count">${(data.sources || []).length} 条线路</span>
     </div>
-    <div class="meta-row" style="margin:0 0 12px"><span>M3U 总源：${esc(summary.source || "—")} · 最后同步 ${esc(formatDateTime(summary.last_sync_at))} · 内置线路 ${summary.seed_stream_count ?? 0} 条</span></div>
-    <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>地址</th><th>状态</th><th>绑定频道</th><th>来源</th><th></th></tr></thead><tbody id="source-body"></tbody></table></div></section>`;
-  const renderRows = () => {
-    const typeFilter = $("#source-type-filter").value;
-    const rows = data.sources.filter(row => !typeFilter || row.source_type === typeFilter);
-    $("#source-count").textContent = `${rows.length} 条线路`;
-    $("#source-body").innerHTML = rows.length ? rows.map(row => {
-      const custom = row.source_type === "custom";
+    <div class="meta-row" style="margin:0 0 12px"><span>${esc(summary.source || "M3U")} · 最后同步 ${esc(formatDateTime(summary.last_sync_at))} · 内置线路 ${summary.seed_stream_count ?? 0} 条</span></div>
+    <div id="source-groups"></div>
+    ${unbound.length ? `<section class="panel"><h3>待绑定线路</h3><div class="data-table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>地址</th><th>类型</th><th>绑定频道</th><th></th></tr></thead><tbody>${unbound.map(row => {
       const host = (() => { try { return new URL(row.url).host; } catch { return row.url; } })();
       return `<tr>
-        <td><strong>${esc(row.name || host)}</strong>${row.current ? ' <span class="badge success">当前</span>' : ""}</td>
+        <td><strong>${esc(row.label || host)}</strong>${row.note ? `<small>${esc(row.note)}</small>` : ""}</td>
         <td><span title="${esc(row.url)}">${esc(host)}</span></td>
-        <td>${row.enabled === false ? '<span class="badge">已禁用</span>' : '<span class="badge success">启用</span>'}</td>
-        <td>${row.channel_id ? `${esc(row.channel_name || row.channel_id)}<small>${esc(row.channel_id)}</small>` : '<span class="badge">未绑定</span>'}</td>
-        <td>${custom ? '<span class="badge warning">自定义</span>' : '<span class="badge info">内置</span>'}</td>
-        <td><div class="table-actions"><button class="button small ghost" data-source-test="${esc(row.url)}" data-source-name="${esc(row.name || row.channel_id || host)}">测试</button>${custom ? `<button class="button small secondary" data-source-edit="${esc(row._id)}">编辑</button><button class="button small danger" data-source-delete="${esc(row._id)}">删除</button>` : ""}</div></td>
+        <td><span class="badge info">${esc(SOURCE_KIND_LABELS[row.kind] || "线路")}</span></td>
+        <td><select class="select" data-bind-source="${esc(row.source_id)}"><option value="">选择频道…</option>${channels.map(c => `<option value="${esc(c.channel_id)}">${esc(c.name || c.channel_id)}</option>`).join("")}</select></td>
+        <td><div class="table-actions"><button class="button small ghost" data-source-test="${esc(row.url)}" data-source-name="${esc(row.label || row.channel_id || host)}">测试</button><button class="button small danger" data-source-delete="${esc(row.source_id)}">删除</button></div></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6">${emptyState(
-      "暂无线路",
-      data.sources.length ? "当前筛选条件下没有线路。" : "先在频道管理添加首个频道，或按部署文档批量导入；备用线路可在这里新增并绑定频道。",
-      true,
-    )}</td></tr>`;
+    }).join("")}</tbody></table></div></section>` : ""}`;
+  const renderGroups = () => {
+    const query = ($("#source-filter")?.value || "").trim().toLowerCase();
+    const groups = [...grouped.entries()].filter(([channelId, rows]) => {
+      if (!query) return true;
+      const name = (rows[0]?.channel_name || channelId || "").toLowerCase();
+      return name.includes(query) || String(channelId).toLowerCase().includes(query);
+    });
+    $("#source-count").textContent =
+      `${groups.reduce((total, [, rows]) => total + rows.length, 0)} 条线路 · ${groups.length} 个频道`;
+    $("#source-groups").innerHTML = groups.length ? groups.map(([channelId, rows]) => {
+      const title = rows[0]?.channel_name || channelId;
+      return `<section class="panel" style="margin-bottom:14px">
+        <div class="meta-row" style="margin-bottom:10px"><strong>${esc(title)}</strong><span class="badge">${esc(channelId)}</span><span class="badge ${rows.some(r => r.current && !r.preferred) ? "warning" : "success"}">${rows.some(r => r.current && !r.preferred) ? "已回退到备用" : "使用首选"}</span><span>${rows.length} 条线路</span></div>
+        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>线路</th><th>地址</th><th>类型</th><th>状态</th><th>质量</th><th></th></tr></thead><tbody>
+        ${rows.map(row => {
+          const host = (() => { try { return new URL(row.url).host; } catch { return row.url; } })();
+          const marks = [];
+          if (row.preferred) marks.push('<span class="badge success">首选</span>');
+          if (row.locked) marks.push('<span class="badge info">已锁定</span>');
+          if (row.current && !row.preferred) marks.push('<span class="badge warning">当前</span>');
+          if (!row.enabled) marks.push('<span class="badge">已禁用</span>');
+          if (row.origin === "seed") marks.push('<span class="badge">内置</span>');
+          if (row.origin === "import") marks.push('<span class="badge warning">导入</span>');
+          return `<tr>
+            <td>${marks.join(" ")}<br><small>${esc(row.label || "")}</small></td>
+            <td><span title="${esc(row.url)}">${esc(host)}</span>${row.last_error ? `<small class="danger">${esc(shorten(row.last_error, 60))}</small>` : ""}</td>
+            <td><span class="badge">${esc(SOURCE_KIND_LABELS[row.kind] || "线路")}</span></td>
+            <td>${row.enabled ? "启用" : "禁用"}</td>
+            <td>${esc((streamQualityLabel(row.quality) || "").replace(/^ · /, "") || "—")}</td>
+            <td><div class="table-actions">
+              <button class="button small ghost" data-source-test="${esc(row.url)}" data-source-name="${esc(row.label || row.channel_id)}">测试</button>
+              ${!row.preferred ? `<button class="button small secondary" data-source-preferred="${esc(row.source_id)}">设为首选</button><button class="button small ghost" data-source-use="${esc(row.source_id)}">临时使用</button>` : ""}
+              <button class="button small ghost" data-source-toggle="${esc(row.source_id)}" data-source-enabled="${row.enabled ? "false" : "true"}">${row.enabled ? "禁用" : "启用"}</button>
+              ${row.origin !== "seed" ? `<button class="button small secondary" data-source-edit="${esc(row.source_id)}">编辑</button><button class="button small danger" data-source-delete="${esc(row.source_id)}">删除</button>` : ""}
+            </div></td>
+          </tr>`;
+        }).join("")}
+        </tbody></table></div></section>`;
+    }).join("") : emptyState("没有匹配的线路", "调整筛选或新增备用源。", true);
   };
-  renderRows();
-  $("#source-type-filter").addEventListener("change", renderRows);
+  renderGroups();
+  $("#source-filter").addEventListener("input", renderGroups);
   $("#source-new").addEventListener("click", () => openSourceForm(channels));
-  $("#source-body").addEventListener("click", async event => {
-    const test = event.target.closest("[data-source-test]");
-    const edit = event.target.closest("[data-source-edit]");
-    const del = event.target.closest("[data-source-delete]");
-    if (test) return testSourceUrl(test.dataset.sourceTest, test.dataset.sourceName);
-    if (edit) return openSourceForm(channels, data.sources.find(row => row._id === edit.dataset.sourceEdit));
-    if (del) {
-      const row = data.sources.find(item => item._id === del.dataset.sourceDelete);
-      if (!confirm(`确定删除自定义源「${row?.name || row?.url}」？`)) return;
-      try {
-        await api(`/api/sources/${encodeURIComponent(row._id)}`, { method: "DELETE" });
-        toast("自定义源已删除"); renderRoute();
-      } catch (error) { toast(error.message, "error"); }
-    }
-  });
+  $("#source-import").addEventListener("click", () => openImportForm());
+  bindSourceDelegation(data.sources || [], channels);
+}
+
+function bindSourceDelegation(rows, channels) {
+  const view = $("#view");
+  if (view._sourceClick) view.removeEventListener("click", view._sourceClick);
+  if (view._sourceChange) view.removeEventListener("change", view._sourceChange);
+  view._sourceClick = event => handleSourceActions(event, rows, channels);
+  view._sourceChange = event => {
+    const bind = event.target.closest("[data-bind-source]");
+    if (!bind || !bind.value) return;
+    api(`/api/sources/${encodeURIComponent(bind.dataset.bindSource)}`, { method: "PATCH", body: { channel_id: bind.value } })
+      .then(() => { toast("线路已绑定到频道"); renderRoute(); })
+      .catch(error => toast(error.message, "error"));
+  };
+  view.addEventListener("click", view._sourceClick);
+  view.addEventListener("change", view._sourceChange);
+}
+
+async function handleSourceActions(event, rows, channels) {
+  const test = event.target.closest("[data-source-test]");
+  const preferred = event.target.closest("[data-source-preferred]");
+  const use = event.target.closest("[data-source-use]");
+  const toggle = event.target.closest("[data-source-toggle]");
+  const edit = event.target.closest("[data-source-edit]");
+  const del = event.target.closest("[data-source-delete]");
+  if (test) return testSourceUrl(test.dataset.sourceTest, test.dataset.sourceName);
+  if (preferred) {
+    if (!confirm("设为该频道的首选源后，它会锁定并排在第一位。确定继续？")) return;
+    try {
+      await api(`/api/sources/${encodeURIComponent(preferred.dataset.sourcePreferred)}/preferred`, { method: "POST" });
+      toast("已设为首选并锁定"); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+    return;
+  }
+  if (use) {
+    try {
+      await api(`/api/sources/${encodeURIComponent(use.dataset.sourceUse)}/activate`, { method: "POST", body: { mode: "temporary" } });
+      toast("已临时切换；首选源保持不变"); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+    return;
+  }
+  if (toggle) {
+    try {
+      await api(`/api/sources/${encodeURIComponent(toggle.dataset.sourceToggle)}`, { method: "PATCH", body: { enabled: toggle.dataset.sourceEnabled === "true" } });
+      toast("线路状态已更新"); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+    return;
+  }
+  if (edit) {
+    const row = rows.find(item => item.source_id === edit.dataset.sourceEdit);
+    return openSourceForm(channels, row);
+  }
+  if (del) {
+    const row = rows.find(item => item.source_id === del.dataset.sourceDelete);
+    if (!confirm(`确定删除线路「${row?.label || row?.url}」？`)) return;
+    try {
+      await api(`/api/sources/${encodeURIComponent(row.source_id)}`, { method: "DELETE" });
+      toast("线路已删除"); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  }
 }
 
 function openSourceForm(channels, existing = null) {
-  openModal(existing ? "编辑自定义源" : "新增自定义源", `<form id="source-form" class="form-grid">
-    <label class="field wide"><span>名称</span><input class="input" name="name" required maxlength="100" value="${esc(existing?.name || "")}" placeholder="例如：央视备用线路"></label>
+  openModal(existing ? "编辑直播源" : "新增备用源", `<form id="source-form" class="form-grid">
+    <label class="field wide"><span>名称</span><input class="input" name="name" required maxlength="100" value="${esc(existing?.label || "")}" placeholder="例如：央视备用线路"></label>
     <label class="field wide"><span>线路 URL</span><input class="input" name="url" required value="${esc(existing?.url || "")}" placeholder="http://... 或 https://..."></label>
     <label class="field wide"><span>绑定频道（可选）</span><select class="select" name="channel_id"><option value="">不绑定</option>${channels.map(c => `<option value="${esc(c.channel_id)}" ${c.channel_id === (existing?.channel_id || "") ? "selected" : ""}>${esc(c.name || c.channel_id)}</option>`).join("")}</select></label>
     <label class="field wide"><span>备注</span><input class="input" name="note" maxlength="200" value="${esc(existing?.note || "")}" placeholder="可选，例如：备用线路、1080p"></label>
     <label class="field"><span>状态</span><select class="select" name="enabled"><option value="true" ${existing?.enabled !== false ? "selected" : ""}>启用</option><option value="false" ${existing?.enabled === false ? "selected" : ""}>禁用</option></select></label>
+    <p class="form-hint wide">新增的线路默认作为备用源，不会替换频道已锁定的首选源。需要替换时在列表中点“设为首选”。</p>
     <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">${existing ? "保存" : "添加"}</button></div>
   </form>`);
   $("#source-form").addEventListener("submit", async event => {
@@ -1046,8 +1148,55 @@ function openSourceForm(channels, existing = null) {
       channel_id: data.get("channel_id") || null,
     };
     try {
-      await api(existing ? `/api/sources/${encodeURIComponent(existing._id)}` : "/api/sources", { method: existing ? "PATCH" : "POST", body });
-      toast(existing ? "自定义源已更新" : "自定义源已添加"); closeModal(); renderRoute();
+      await api(existing ? `/api/sources/${encodeURIComponent(existing.source_id)}` : "/api/sources", { method: existing ? "PATCH" : "POST", body });
+      toast(existing ? "线路已更新" : "备用源已添加"); closeModal(); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  });
+}
+
+function openImportForm() {
+  openModal("导入备用 M3U", `<form id="import-form" class="form-grid">
+    <label class="field wide"><span>M3U 地址或容器内文件路径</span><input class="input" name="source" required placeholder="https://... 或 /data/m3u/backup.m3u"></label>
+    <label class="field wide"><span>匹配方式</span>
+      <div class="inline-checks">
+        <label><input type="checkbox" name="match" value="tvg_id" checked> tvg-id</label>
+        <label><input type="checkbox" name="match" value="name" checked> 名称</label>
+        <label><input type="checkbox" name="match" value="normalized_name" checked> 归一化名称</label>
+      </div>
+    </label>
+    <p class="form-hint wide">导入只会新增备用源，不会替换任何首选源。先预览，确认后再写入。</p>
+    <div id="import-preview" class="wide"></div>
+    <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="button" id="import-preview-btn">预览</button><button class="button secondary" type="button" id="import-apply-btn" disabled>确认导入</button></div>
+  </form>`);
+  let lastSource = "";
+  let lastMatch = [];
+  const collect = () => ({
+    source: $("#import-form [name=source]").value.trim(),
+    match: [...document.querySelectorAll("#import-form [name=match]:checked")].map(item => item.value),
+  });
+  $("#import-preview-btn").addEventListener("click", async () => {
+    const body = collect();
+    if (!body.source) return toast("请填写 M3U 地址或路径", "error");
+    $("#import-preview").innerHTML = '<div class="page-loading"><span class="spinner"></span><p>正在匹配频道…</p></div>';
+    try {
+      const result = await api("/api/sources/import", { method: "POST", body: { ...body, dry_run: true } });
+      lastSource = body.source;
+      lastMatch = body.match;
+      const counts = result.counts || {};
+      $("#import-preview").innerHTML = `<div class="meta-row"><span class="badge success">可新增 ${counts.create || 0}</span><span class="badge">已存在 ${counts.exists || 0}</span><span class="badge warning">未匹配 ${counts.unbound || 0}</span></div>
+        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>频道</th><th>匹配方式</th><th>线路名称</th><th>结果</th></tr></thead><tbody>${(result.rows || []).slice(0, 50).map(row => `<tr><td>${esc(row.channel_name || row.channel_id || "—")}</td><td>${esc(row.matched_by || "未匹配")}</td><td>${esc(shorten(row.name, 40))}</td><td>${row.action === "create" ? '<span class="badge success">新增备用</span>' : row.action === "exists" ? '<span class="badge">已存在</span>' : '<span class="badge warning">待绑定</span>'}</td></tr>`).join("")}</tbody></table></div>`;
+      $("#import-apply-btn").disabled = !(counts.create > 0);
+    } catch (error) {
+      $("#import-preview").innerHTML = `<p class="danger">${esc(error.message)}</p>`;
+      $("#import-apply-btn").disabled = true;
+    }
+  });
+  $("#import-apply-btn").addEventListener("click", async () => {
+    try {
+      const result = await api("/api/sources/import", { method: "POST", body: { source: lastSource, match: lastMatch, dry_run: false } });
+      toast(`已导入 ${result.created || 0} 条备用线路`);
+      closeModal();
+      renderRoute();
     } catch (error) { toast(error.message, "error"); }
   });
 }

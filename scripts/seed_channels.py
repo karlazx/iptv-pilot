@@ -36,6 +36,125 @@ def parse_m3u(path: Path):
             current = None
 
 
+def sync_channels(database, rows_by_id: dict[str, list[dict]]) -> dict:
+    """Upsert seed channels without ever overriding a user-locked source."""
+    from iptv_pilot.sources import store
+    from iptv_pilot.sources.models import make_source, ordered_sources, url_key
+
+    active_ids = list(rows_by_id)
+    operations = []
+    created_sources = 0
+    preserved_primary = 0
+    touched_channels = 0
+
+    for rows in rows_by_id.values():
+        channel_id = rows[0]["channel_id"]
+        urls = list(dict.fromkeys(row["m3u_url"] for row in rows))
+        existing_channel = database.channels.find_one({"channel_id": channel_id})
+        existing_sources = list(database.sources.find({"channel_id": channel_id}))
+        locked = next(
+            (
+                row
+                for row in ordered_sources(existing_sources)
+                if row.get("locked") and row.get("enabled", True)
+            ),
+            None,
+        )
+        # Selecting an existing channel URL must never move a locked primary.
+        selected = rows[0]
+        if locked:
+            preserved_primary += 1
+        elif existing_channel and existing_channel.get("m3u_url") in urls:
+            selected = next(row for row in rows if row["m3u_url"] == existing_channel["m3u_url"])
+
+        update: dict = {
+            "channel_id": channel_id,
+            "name": selected["name"],
+            "raw_m3u": selected["raw_m3u"],
+            "enabled": True,
+            "source": "iptv-api",
+            "updated_at": datetime.now(UTC),
+        }
+        if not locked:
+            update["m3u_url"] = selected["m3u_url"]
+        operations.append(UpdateOne({"channel_id": channel_id}, {"$set": update}, upsert=True))
+
+        known = {row.get("url_key") for row in existing_sources}
+        for index, url in enumerate(urls):
+            key = url_key(url)
+            if key in known:
+                database.sources.update_many(
+                    {"channel_id": channel_id, "url_key": key},
+                    {"$set": {"enabled": True, "missing_from_seed": False}},
+                )
+                continue
+            document = make_source(
+                channel_id=channel_id,
+                url=url,
+                label=f"{selected['name']} 线路 {index + 1}",
+                origin="seed",
+                origin_key=f"iptv-api:{channel_id}",
+                kind="udpxy" if ":4022/" in url or "/rtp/" in url else "m3u",
+                provider="iptv-api",
+                priority=(locked.get("priority") + 1 if locked else 0) + index,
+            )
+            database.sources.insert_one(document)
+            known.add(key)
+            created_sources += 1
+
+        database.sources.update_many(
+            {
+                "channel_id": channel_id,
+                "origin": "seed",
+                "url_key": {"$nin": [url_key(url) for url in urls]},
+            },
+            {"$set": {"enabled": False, "missing_from_seed": True}},
+        )
+        touched_channels += 1
+
+    result = database.channels.bulk_write(operations, ordered=False) if operations else None
+    if result is None:
+        return {"active": 0, "upserted": 0, "disabled": 0, "sources_created": 0, "locked_preserved": 0}
+    upserted = result.upserted_count
+
+    # A channel removed from the M3U keeps working when it still owns a locked
+    # or user-provided source; only fully seed-owned channels are disabled.
+    removable = [
+        channel["channel_id"]
+        for channel in database.channels.find(
+            {"source": "iptv-api", "channel_id": {"$nin": active_ids}},
+            {"channel_id": 1},
+        )
+        if not database.sources.find_one(
+            {
+                "channel_id": channel["channel_id"],
+                "enabled": True,
+                "$or": [{"locked": True}, {"origin": {"$in": ["custom", "import"]}}],
+            }
+        )
+    ]
+    disabled = 0
+    if removable:
+        result = database.channels.update_many(
+            {"channel_id": {"$in": removable}},
+            {"$set": {"enabled": False, "updated_at": datetime.now(UTC)}},
+        )
+        disabled = result.modified_count
+
+    for channel_id in rows_by_id:
+        channel = database.channels.find_one({"channel_id": channel_id})
+        if channel:
+            store.sync_channel_mirror(database, channel)
+
+    return {
+        "active": len(active_ids),
+        "upserted": upserted,
+        "disabled": disabled,
+        "sources_created": created_sources,
+        "locked_preserved": preserved_primary,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import iptv-api M3U channels into MongoDB")
     parser.add_argument("path", type=Path)
@@ -54,37 +173,17 @@ def main() -> None:
                 rows_by_id: dict[str, list[dict]] = {}
                 for row in parse_m3u(args.path):
                     rows_by_id.setdefault(row["channel_id"], []).append(row)
-                active_ids = list(rows_by_id)
-                operations = []
-                for rows in rows_by_id.values():
-                    selected = rows[0]
-                    candidates = list(dict.fromkeys(row["m3u_url"] for row in rows))
-                    existing = database.channels.find_one(
-                        {"channel_id": selected["channel_id"]}, {"m3u_url": 1}
-                    )
-                    if existing and existing.get("m3u_url") in candidates:
-                        selected = next(
-                            row for row in rows if row["m3u_url"] == existing["m3u_url"]
-                        )
-                    operations.append(
-                        UpdateOne(
-                            {"channel_id": selected["channel_id"]},
-                            {"$set": {**selected, "stream_candidates": candidates}},
-                            upsert=True,
-                        )
-                    )
-                if operations:
-                    result = database.channels.bulk_write(operations, ordered=False)
-                    disabled = database.channels.update_many(
-                        {"source": "iptv-api", "channel_id": {"$nin": active_ids}},
-                        {"$set": {"enabled": False, "updated_at": datetime.now(UTC)}},
-                    )
+                if rows_by_id:
+                    summary = sync_channels(database, rows_by_id)
                     logging.info(
-                        "channel sync active=%s matched=%s upserted=%s disabled=%s",
-                        len(active_ids),
-                        result.matched_count,
-                        result.upserted_count,
-                        disabled.modified_count,
+                        "channel sync active=%s matched=%s upserted=%s disabled=%s "
+                        "sources_created=%s locked_preserved=%s",
+                        summary["active"],
+                        summary["active"],
+                        summary["upserted"],
+                        summary["disabled"],
+                        summary["sources_created"],
+                        summary["locked_preserved"],
                     )
                 else:
                     logging.warning("no channels found in %s", args.path)

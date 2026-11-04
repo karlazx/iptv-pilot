@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -24,6 +25,9 @@ from pymongo import ReturnDocument
 from iptv_pilot import __version__
 from iptv_pilot.common.db import configure_logging, connect_database
 from iptv_pilot.common.live_paths import channel_cache_directory
+from iptv_pilot.sources import resolver, store
+from iptv_pilot.sources.importing import apply_import, preview_import
+from iptv_pilot.sources.models import source_public
 from iptv_pilot.web.live import (
     LiveProxyError,
     LiveTokenSigner,
@@ -244,6 +248,28 @@ class SourceTestRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
 
 
+class SourceActivation(BaseModel):
+    mode: Literal["temporary", "preferred"] = "temporary"
+
+
+class SourceReorder(BaseModel):
+    channel_id: str = Field(min_length=1, max_length=100)
+    source_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class ChannelSourceSelection(BaseModel):
+    source_id: str = Field(min_length=1, max_length=100)
+    mode: Literal["temporary", "preferred"] = "temporary"
+
+
+class SourceImportRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=2000)
+    match: list[Literal["tvg_id", "name", "normalized_name"]] = Field(
+        default_factory=lambda: ["tvg_id", "name", "normalized_name"]
+    )
+    dry_run: bool = True
+
+
 class BufferProfileUpdate(BaseModel):
     profile: Literal["low", "balanced", "smooth"]
 
@@ -265,6 +291,9 @@ def object_id(value: str) -> ObjectId:
         return ObjectId(value)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="对象 ID 无效") from exc
+
+
+logger = logging.getLogger(__name__)
 
 
 @app.middleware("http")
@@ -346,8 +375,16 @@ def channels_admin() -> list[dict]:
         channel_display(row)
         for row in database.channels.find({}, {"stream_quality": 0}).sort("name", 1)
     ]
+    counts = {
+        item["_id"]: item["count"]
+        for item in database.sources.aggregate(
+            [{"$match": {"channel_id": {"$ne": None}}}, {"$group": {"_id": "$channel_id", "count": {"$sum": 1}}}]
+        )
+    }
     for row in rows:
-        row["stream_count"] = len(row.get("stream_candidates") or [])
+        row["stream_count"] = counts.get(row["channel_id"], len(row.get("stream_candidates") or []))
+        row["source_locked"] = bool(row.get("preferred_source_id"))
+        row["active_state"] = row.get("active_state") or "primary"
         row["epg_matched"] = row.get("epg_source") == "xmltv"
         row.pop("stream_candidates", None)
         row.pop("raw_m3u", None)
@@ -371,7 +408,7 @@ def update_channel_admin(channel_id: str, payload: ChannelAdminUpdate) -> dict:
     database.channels.update_one({"channel_id": channel_id}, update)
     row = database.channels.find_one({"channel_id": channel_id})
     display = channel_display(row)
-    display["stream_count"] = len(row.get("stream_candidates") or [])
+    display["stream_count"] = database.sources.count_documents({"channel_id": channel_id})
     return serialize(display)
 
 
@@ -397,7 +434,20 @@ def create_channel(payload: ChannelCreate) -> dict:
     document["created_at"] = datetime.now(UTC)
     document["updated_at"] = document["created_at"]
     document["stream_candidates"] = [document["m3u_url"]]
+    document["source_policy"] = "locked_primary"
     database.channels.insert_one(document)
+    source = store.create_source(
+        database,
+        channel_id=payload.channel_id,
+        url=payload.m3u_url,
+        label=payload.name,
+        kind="custom",
+        provider="手动添加",
+        origin="custom",
+        locked=True,
+        priority=0,
+    )
+    store.set_preferred(database, payload.channel_id, source["source_id"])
     row = database.channels.find_one({"channel_id": payload.channel_id})
     display = channel_display(row)
     display["stream_count"] = 1
@@ -423,16 +473,14 @@ def delete_channel(channel_id: str) -> Response:
             detail="该频道存在未结束的订阅，无法删除；请先停用或删除相关订阅",
         )
     database.channels.delete_one({"channel_id": channel_id})
+    database.sources.delete_many({"channel_id": channel_id})
     return Response(status_code=204)
 
 
 @app.get("/api/channels/{channel_id}/detail")
 def channel_detail(channel_id: str) -> dict:
     """Channel detail drawer: stream list, recent recordings, EPG match status."""
-    channel = database.channels.find_one(
-        {"channel_id": channel_id},
-        {"raw_m3u": 1, "stream_candidates": 1, "stream_quality": 1, "stream_manual": 1},
-    )
+    channel = database.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="频道不存在")
     recordings = list(
@@ -454,78 +502,85 @@ def channel_detail(channel_id: str) -> dict:
     )
 
 
-def _merge_sources(channels: list[dict], custom_rows: list[dict]) -> list[dict]:
-    """Merge seed-derived streams (m3u_url + candidates) with user custom_sources."""
-    sources: list[dict] = []
-    channel_name_by_id = {row["channel_id"]: (row.get("name") or row["channel_id"]) for row in channels}
-    for channel in channels:
-        current_url = channel.get("m3u_url")
-        candidates = list(dict.fromkeys(channel.get("stream_candidates") or []))
-        if current_url and current_url not in candidates:
-            candidates.insert(0, current_url)
-        for url in candidates:
-            sources.append(
-                {
-                    "channel_id": channel["channel_id"],
-                    "name": channel_name_by_id.get(channel["channel_id"], channel["channel_id"]),
-                    "channel_name": channel_name_by_id.get(channel["channel_id"], channel["channel_id"]),
-                    "url": url,
-                    "source_type": "seed",
-                    "note": "",
-                    "enabled": True,
-                    "current": url == current_url,
-                }
-            )
-    for row in custom_rows:
-        channel_id = row.get("channel_id")
-        sources.append(
-            {
-                "_id": row["_id"],
-                "name": row.get("name") or urlparse(row["url"]).netloc,
-                "channel_id": channel_id,
-                "channel_name": channel_name_by_id.get(channel_id) if channel_id else None,
-                "url": row["url"],
-                "source_type": "custom",
-                "note": row.get("note", ""),
-                "enabled": row.get("enabled", True),
-                "current": False,
-            }
-        )
-    return sources
+def _channel_name_map(channels: list[dict]) -> dict[str, str]:
+    return {row["channel_id"]: (row.get("name_override") or row.get("name") or row["channel_id"]) for row in channels}
+
+
+def _public_source(row: dict, channel_names: dict[str, str]) -> dict:
+    channel_id = row.get("channel_id")
+    return {
+        **source_public(row),
+        "name": row.get("label") or urlparse(row.get("url") or "").netloc,
+        "source_type": "seed" if row.get("origin") == "seed" else "custom",
+        "channel_name": channel_names.get(channel_id) if channel_id else None,
+    }
 
 
 @app.get("/api/sources")
 def sources() -> dict:
-    """Merged stream list: seed candidates + user custom_sources."""
+    """Channel-grouped source list for the management page."""
     channels = list(
         database.channels.find(
-            {}, {"channel_id": 1, "name": 1, "name_override": 1, "m3u_url": 1, "stream_candidates": 1}
+            {},
+            {
+                "channel_id": 1,
+                "name": 1,
+                "name_override": 1,
+                "m3u_url": 1,
+                "preferred_source_id": 1,
+                "active_source_id": 1,
+                "source_policy": 1,
+            },
         ).sort("channel_id", 1)
     )
-    for row in channels:
-        row["name"] = row.get("name_override") or row.get("name") or row["channel_id"]
-    custom_rows = list(database.custom_sources.find().sort("created_at", -1))
-    rows = _merge_sources(channels, custom_rows)
+    channel_names = _channel_name_map(channels)
+    rows: list[dict] = []
+    for channel in channels:
+        payload = store.payload_for_channel(database, channel)
+        for row in payload["sources"]:
+            rows.append(
+                {
+                    **_public_source(row, channel_names),
+                    "name": row.get("label") or urlparse(row.get("url") or "").netloc,
+                    "channel_name": channel_names.get(channel["channel_id"]),
+                    "current": row.get("current", False),
+                    "preferred": row.get("preferred", False),
+                    "policy": payload["policy"],
+                }
+            )
+    unbound = [
+        {**_public_source(row, channel_names), "current": False, "preferred": False}
+        for row in store.unbound_sources(database)
+    ]
     latest_sync = database.channels.find_one(sort=[("updated_at", -1)])
     return serialize(
         {
             "m3u_summary": {
-                "source": "iptv-api result.m3u",
+                "source": "M3U 同步 + 用户自定义",
                 "last_sync_at": (latest_sync or {}).get("updated_at"),
-                "seed_stream_count": sum(1 for row in rows if row["source_type"] == "seed"),
+                "seed_stream_count": sum(1 for row in rows if row.get("origin") == "seed"),
             },
-            "sources": rows,
+            "sources": rows + unbound,
+            "unbound": unbound,
         }
     )
 
 
 @app.post("/api/sources", status_code=201)
 def create_source(payload: SourceCreate) -> dict:
-    document = payload.model_dump()
-    document["created_at"] = datetime.now(UTC)
-    document["updated_at"] = document["created_at"]
-    result = database.custom_sources.insert_one(document)
-    return serialize(database.custom_sources.find_one({"_id": result.inserted_id}))
+    existing = store.duplicate_url(database, payload.channel_id, payload.url)
+    if existing:
+        raise HTTPException(status_code=409, detail="该频道已存在相同地址的直播源")
+    document = store.create_source(
+        database,
+        channel_id=payload.channel_id,
+        url=payload.url,
+        label=payload.name,
+        note=payload.note,
+        enabled=payload.enabled,
+        origin="custom",
+    )
+    return serialize(source_public(document))
 
 
 @app.patch("/api/sources/{source_id}")
@@ -533,28 +588,83 @@ def update_source(source_id: str, payload: SourceUpdate) -> dict:
     update = payload.model_dump(exclude_unset=True)
     if not update:
         raise HTTPException(status_code=422, detail="没有提供可更新的直播源字段")
-    unset: dict[str, str] = {}
-    if "channel_id" in update and update["channel_id"] is None:
-        unset["channel_id"] = ""
-        update.pop("channel_id")
-    update["updated_at"] = datetime.now(UTC)
-    operation: dict[str, Any] = {"$set": update}
-    if unset:
-        operation["$unset"] = unset
-    result = database.custom_sources.find_one_and_update(
-        {"_id": object_id(source_id)}, operation, return_document=ReturnDocument.AFTER
-    )
-    if not result:
-        raise HTTPException(status_code=404, detail="直播源不存在")
-    return serialize(result)
+    if update.get("name") is not None:
+        update["label"] = update.pop("name")
+    channel_id = update.get("channel_id", "__unchanged__")
+    try:
+        if channel_id is not None and channel_id != "__unchanged__":
+            result = store.bind_source(database, source_id, channel_id)
+        else:
+            update.pop("channel_id", None)
+            result = store.update_source(database, source_id, update)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return serialize(source_public(result))
 
 
 @app.delete("/api/sources/{source_id}", status_code=204, response_class=Response)
 def delete_source(source_id: str) -> Response:
-    result = database.custom_sources.delete_one({"_id": object_id(source_id)})
-    if not result.deleted_count:
+    try:
+        deleted = store.delete_source(database, source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="直播源不存在")
     return Response(status_code=204)
+
+
+@app.post("/api/sources/{source_id}/preferred")
+def prefer_source(source_id: str) -> dict:
+    row = database.sources.find_one({"source_id": source_id})
+    if not row or not row.get("channel_id"):
+        raise HTTPException(status_code=404, detail="直播源未绑定频道")
+    try:
+        channel = store.set_preferred(database, row["channel_id"], source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return serialize(store.payload_for_channel(database, channel))
+
+
+@app.post("/api/sources/{source_id}/activate")
+def activate_source(source_id: str, payload: SourceActivation) -> dict:
+    row = database.sources.find_one({"source_id": source_id})
+    if not row or not row.get("channel_id"):
+        raise HTTPException(status_code=404, detail="直播源未绑定频道")
+    try:
+        channel = store.activate(
+            database,
+            row["channel_id"],
+            source_id,
+            temporary=payload.mode == "temporary",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return serialize(store.payload_for_channel(database, channel))
+
+
+@app.post("/api/sources/reorder")
+def reorder_sources(payload: SourceReorder) -> dict:
+    store.reorder(database, payload.channel_id, payload.source_ids)
+    channel = database.channels.find_one({"channel_id": payload.channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="频道不存在")
+    return serialize(store.payload_for_channel(database, channel))
+
+
+@app.post("/api/sources/import")
+def import_sources(payload: SourceImportRequest) -> dict:
+    """Import an M3U as backup sources; never replaces a channel's primary."""
+    match = tuple(payload.match)
+    try:
+        if payload.dry_run:
+            return serialize(preview_import(database, source=payload.source, match=match))
+        return serialize(apply_import(database, source=payload.source, match=match))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=f"无法读取 M3U：{exc}") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail=f"无法读取 M3U：{exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 async def _probe_source(url: str) -> dict:
@@ -616,41 +726,34 @@ async def test_source(payload: SourceTestRequest) -> dict:
 
 
 def channel_stream_options(channel_id: str) -> dict:
-    channel = database.channels.find_one(
-        {"channel_id": channel_id},
-        {"m3u_url": 1, "stream_candidates": 1, "stream_quality": 1, "stream_manual": 1},
-    )
+    channel = database.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="频道不存在")
-    candidates = list(dict.fromkeys(channel.get("stream_candidates") or []))
-    current_url = channel.get("m3u_url")
-    if current_url and current_url not in candidates:
-        candidates.insert(0, current_url)
-    current_index = next(
-        (index for index, url in enumerate(candidates) if url == current_url), None
-    )
-    quality_results = (channel.get("stream_quality") or {}).get("results") or []
-    quality_by_host = {
-        row.get("host"): row for row in quality_results if isinstance(row, dict)
-    }
-    manual = channel.get("stream_manual")
-
-    def candidate_summary(index: int, url: str) -> dict:
-        return {
+    payload = store.payload_for_channel(database, channel)
+    # Legacy fields kept for clients that still render an index-based picker.
+    candidates = [row.get("url") for row in payload["sources"]]
+    active = payload.get("active_source_id")
+    payload["candidates"] = [
+        {
             "index": index,
-            "host": urlparse(url).netloc,
-            "current": index == current_index,
-            "quality": quality_by_host.get(urlparse(url).netloc),
+            "source_id": row.get("source_id"),
+            "host": urlparse(row.get("url") or "").netloc,
+            "current": row.get("source_id") == active,
+            "quality": row.get("quality"),
+            "kind": row.get("kind"),
+            "locked": row.get("locked"),
+            "enabled": row.get("enabled"),
+            "url": row.get("url"),
         }
-
-    return {
-        "channel_id": channel_id,
-        "current_index": current_index,
-        "manual": serialize(manual) if manual else None,
-        "candidates": [
-            candidate_summary(index, url) for index, url in enumerate(candidates)
-        ],
-    }
+        for index, row in enumerate(payload["sources"])
+    ]
+    payload["current_index"] = next(
+        (index for index, row in enumerate(payload["sources"]) if row.get("source_id") == active),
+        None,
+    )
+    payload["manual"] = {"policy": payload["policy"]} if payload["policy"] == "manual" else None
+    payload["candidates_urls"] = candidates
+    return payload
 
 
 @app.get("/api/channels/{channel_id}/streams")
@@ -658,31 +761,51 @@ def channel_streams(channel_id: str) -> dict:
     return channel_stream_options(channel_id)
 
 
-@app.post("/api/channels/{channel_id}/stream")
-def select_channel_stream(channel_id: str, payload: StreamSelection) -> dict:
-    channel = database.channels.find_one(
-        {"channel_id": channel_id},
-        {"m3u_url": 1, "stream_candidates": 1},
-    )
+@app.post("/api/channels/{channel_id}/source")
+def select_channel_source(channel_id: str, payload: ChannelSourceSelection) -> dict:
+    channel = database.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="频道不存在")
-    candidates = list(dict.fromkeys(channel.get("stream_candidates") or []))
-    current_url = channel.get("m3u_url")
-    if current_url and current_url not in candidates:
-        candidates.insert(0, current_url)
+    try:
+        updated = store.activate(
+            database, channel_id, payload.source_id, temporary=payload.mode == "temporary"
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return serialize(store.payload_for_channel(database, updated))
+
+
+@app.post("/api/channels/{channel_id}/stream")
+def select_channel_stream(channel_id: str, payload: StreamSelection) -> dict:
+    """Legacy index-based picker; translates to a source_id selection."""
+    channel = database.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="频道不存在")
+    payload_sources = store.payload_for_channel(database, channel)["sources"]
     if payload.index is None:
-        update: dict[str, Any] = {"$unset": {"stream_manual": ""}}
-    else:
-        if payload.index < 0 or payload.index >= len(candidates):
-            raise HTTPException(status_code=400, detail="直播线路序号超出范围")
-        update = {
-            "$set": {
-                "m3u_url": candidates[payload.index],
-                "stream_manual": {"index": payload.index, "at": datetime.now(UTC)},
-            }
-        }
-    database.channels.update_one({"channel_id": channel_id}, update)
+        return serialize(store.payload_for_channel(database, channel))
+    if payload.index < 0 or payload.index >= len(payload_sources):
+        raise HTTPException(status_code=400, detail="直播线路序号超出范围")
+    store.activate(
+        database,
+        channel_id,
+        payload_sources[payload.index]["source_id"],
+        temporary=True,
+    )
     return channel_stream_options(channel_id)
+
+
+async def _probe_live_url(url: str) -> None:
+    """Raise when an upstream cannot serve a usable live stream."""
+    if live_http_client is None:
+        raise LiveProxyError("直播代理尚未就绪")
+    upstream = await open_live_response(live_http_client, url)
+    if not response_is_playlist(upstream):
+        await upstream.aclose()
+        return
+    content = await read_live_response(upstream)
+    if not content.lstrip().startswith(b"#EXTM3U"):
+        raise LiveProxyError("上游直播源返回了无效的 HLS 播放列表")
 
 
 async def live_response(url: str) -> Response:
@@ -692,6 +815,11 @@ async def live_response(url: str) -> Response:
         upstream = await open_live_response(live_http_client, url)
     except LiveProxyError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return await build_live_response(upstream)
+
+
+async def build_live_response(upstream) -> Response:
+    """Proxy an already-opened upstream into a browser-safe response."""
     media_type = live_media_type(upstream)
     if response_is_playlist(upstream):
         try:
@@ -752,7 +880,62 @@ async def watch_live_channel(channel_id: str) -> Response:
     normalized = normalized_live_manifest(channel_id)
     if normalized is not None:
         return normalized
-    return await live_response(channel["m3u_url"])
+
+    rows = resolver.sources_for(database, channel)
+    if not rows:
+        # Legacy channel without migrated sources: behave exactly as before.
+        return await live_response(channel["m3u_url"])
+
+    candidates = resolver.candidates(database, channel)
+    if not candidates:
+        raise HTTPException(status_code=502, detail="该频道没有启用的直播源")
+
+    preferred_id = (
+        channel.get("preferred_source_id")
+        or channel.get("active_source_id")
+        or (candidates[0].get("source_id") if candidates else None)
+    )
+    if channel.get("active_state") == "fallback" and resolver.retry_due(channel):
+        resolver.mark_retry_probe(database, channel)
+
+    last_error: Exception | None = None
+    for source in candidates:
+        try:
+            upstream = await open_live_response(live_http_client, source["url"])
+        except LiveProxyError as exc:
+            last_error = exc
+            resolver.record_failure(database, source, str(exc))
+            logger.warning(
+                "live source unavailable channel=%s source=%s error=%s",
+                channel_id,
+                source.get("source_id"),
+                exc,
+            )
+            continue
+        try:
+            response = await build_live_response(upstream)
+        except HTTPException as exc:
+            last_error = exc
+            resolver.record_failure(database, source, str(exc.detail))
+            logger.warning(
+                "live source rejected channel=%s source=%s detail=%s",
+                channel_id,
+                source.get("source_id"),
+                exc.detail,
+            )
+            continue
+        resolver.record_success(database, source)
+        is_preferred = source.get("source_id") == preferred_id
+        if not is_preferred:
+            resolver.mark_active(database, channel, source, "fallback")
+        elif channel.get("active_source_id") != source.get("source_id") or channel.get("active_state") != "primary":
+            resolver.mark_active(database, channel, source, "primary")
+        response.headers["X-IPTV-Source-Id"] = source.get("source_id") or ""
+        response.headers["X-IPTV-Source-State"] = "primary" if is_preferred else "fallback"
+        return response
+
+    detail = str(last_error) if last_error else "所有直播源均不可用"
+    raise HTTPException(status_code=502, detail=detail)
 
 
 @app.get("/api/channels/{channel_id}/normalized/{filename}")
