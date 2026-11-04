@@ -192,10 +192,55 @@ def capture_stream(source_url: str, output_path: Path, scheduled_end: datetime) 
             ) from pyav_error
 
 
+def _pinned_source(recording: dict) -> dict | None:
+    """Return the source snapshotted for this recording, if any."""
+    if not recording.get("source_url"):
+        return None
+    return {
+        "source_id": recording.get("source_id"),
+        "url": recording["source_url"],
+        "kind": recording.get("source_kind"),
+    }
+
+
+def _resolve_recording_source(database, channel: dict) -> dict:
+    """Resolve once at claim time; the URL is pinned for the whole recording."""
+    from iptv_pilot.sources import resolver
+
+    try:
+        return resolver.resolve_recording_source(database, channel)
+    except resolver.SourceUnavailable:
+        # Legacy channels may not have migrated source documents yet.
+        if channel.get("m3u_url"):
+            return {
+                "source_id": None,
+                "url": channel["m3u_url"],
+                "kind": channel.get("source"),
+            }
+        raise
+
+
 def process_recording(database, recording: dict) -> None:
     channel = database.channels.find_one({"channel_id": recording["channel_id"], "enabled": True, "disabled": {"$ne": True}})
-    if not channel or not channel.get("m3u_url"):
+    if not channel:
         raise RuntimeError(f"no enabled stream URL for channel {recording['channel_id']}")
+    source = _pinned_source(recording) or _resolve_recording_source(database, channel)
+    if not source.get("url"):
+        raise RuntimeError(f"no enabled stream URL for channel {recording['channel_id']}")
+    if not recording.get("source_url"):
+        database.recordings.update_one(
+            {"_id": recording["_id"]},
+            {
+                "$set": {
+                    "source_id": source.get("source_id"),
+                    "source_url": source["url"],
+                    "source_kind": source.get("kind"),
+                }
+            },
+        )
+        recording.update(
+            {"source_id": source.get("source_id"), "source_url": source["url"], "source_kind": source.get("kind")}
+        )
     now = datetime.now(UTC)
     scheduled_end = recording.get("scheduled_end") or recording["end_time"]
     duration = max(1, int((scheduled_end - now).total_seconds()))
@@ -207,10 +252,16 @@ def process_recording(database, recording: dict) -> None:
     )
     output_path = channel_dir / filename
     temporary_path = output_path.with_suffix(".part.ts")
-    logger.info("recording started id=%s output=%s duration=%s", recording["_id"], output_path, duration)
+    logger.info(
+        "recording started id=%s output=%s duration=%s source=%s",
+        recording["_id"],
+        output_path,
+        duration,
+        source.get("source_id") or "legacy",
+    )
     try:
         temporary_path.unlink(missing_ok=True)
-        capture_method = capture_stream(channel["m3u_url"], temporary_path, scheduled_end)
+        capture_method = capture_stream(source["url"], temporary_path, scheduled_end)
         size = temporary_path.stat().st_size
         minimum = int(os.getenv("RECORDING_MIN_BYTES", "1048576"))
         if size < minimum:

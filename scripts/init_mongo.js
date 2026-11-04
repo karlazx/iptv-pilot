@@ -28,7 +28,7 @@ if (!appDb.getUser(appUser)) {
 }
 
 const collections = [
-  "channels", "epg_programs", "subscriptions", "recordings", "transcripts", "summaries", "bookmarks", "push_events"
+  "channels", "epg_programs", "subscriptions", "recordings", "transcripts", "summaries", "bookmarks", "push_events", "sources"
 ];
 for (const name of collections) {
   if (!appDb.getCollectionNames().includes(name)) appDb.createCollection(name);
@@ -53,5 +53,13 @@ appDb.summaries.createIndex(
 appDb.bookmarks.createIndex({user: 1, item_type: 1, item_id: 1}, {unique: true, name: "bookmark_unique"});
 appDb.push_events.createIndex({summary_id: 1, provider: 1}, {unique: true, name: "push_event_unique"});
 appDb.push_events.createIndex({status: 1, updated_at: -1}, {name: "push_event_status"});
+appDb.sources.createIndex({channel_id: 1, priority: 1}, {name: "source_channel_priority"});
+appDb.sources.createIndex({source_id: 1}, {unique: true, name: "source_id_unique"});
+appDb.sources.createIndex(
+  {channel_id: 1, url_key: 1},
+  {unique: true, name: "source_channel_url_unique", partialFilterExpression: {channel_id: {$type: "string"}}}
+);
+appDb.sources.createIndex({channel_id: 1, locked: 1}, {name: "source_channel_locked"});
+appDb.sources.createIndex({origin: 1}, {name: "source_origin"});
 
 print(`MongoDB initialization complete: ${databaseName}`);

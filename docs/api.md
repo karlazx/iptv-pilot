@@ -7,7 +7,11 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 | GET | `/api/channels?category=` | 频道列表 |
 | GET | `/api/channels/admin` | 管理视图中的完整频道列表 |
 | POST/PATCH/DELETE | `/api/channels...` | 创建、修改、批量启停或删除自定义频道 |
-| GET/POST/PATCH/DELETE | `/api/sources...` | 管理用户提供的直播线路 |
+| GET/POST/PATCH/DELETE | `/api/sources...` | 管理频道直播源（首选/备用） |
+| POST | `/api/sources/{source_id}/preferred` | 设为该频道首选并锁定 |
+| POST | `/api/sources/{source_id}/activate` | 临时切换到某条源；不改变首选 |
+| POST | `/api/sources/reorder` | 重排某频道的源顺序 |
+| POST | `/api/sources/import` | 导入备用 M3U，`dry_run=true` 仅预览 |
 | POST | `/api/sources/test` | 测试用户提供的线路 |
 | GET | `/api/channels/{channel_id}/live` | 获取同源代理后的频道 HLS 直播清单 |
 | GET | `/api/live/proxy/{signed_token}` | 获取直播子清单、密钥或媒体分片；仅使用服务端签名 URL |
@@ -82,7 +86,9 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 
 ## 直播播放说明
 
-- 管理台不把第三方直播地址直接交给浏览器；Web 服务读取频道当前优选 URL，重写 HLS 清单并通过带时效签名的同源 URL 转发子清单和媒体分片。
+- 管理台不把第三方直播地址直接交给浏览器；Web 服务按频道解析当前生效源（默认为已锁定的首选源），重写 HLS 清单并通过带时效签名的同源 URL 转发子清单和媒体分片。
+- 首选源不可用时会按优先级自动回退到备用源，响应头 `X-IPTV-Source-Id` 与 `X-IPTV-Source-State`（`primary` / `fallback`）可用于客户端判断当前状态。首选恢复后，下一次请求会自动切回。
+- 无论质量刷新还是回退，都不会修改被锁定首选源的地址、优先级或锁定状态；只有用户显式调用 `/api/sources/{source_id}/preferred` 才会更换首选。
 - Chrome/Edge 使用随应用本地部署的 hls.js，Safari 可使用其原生 HLS 能力；运行时不访问外部 CDN。
 - 节目单、频道明确的订阅和录制记录均可打开直播播放器；全频道关键词订阅因为没有唯一频道，不显示直播按钮。
 - 上游不可用返回 502，签名无效或过期返回 403；响应不暴露 MongoDB 或 NAS 文件路径。
