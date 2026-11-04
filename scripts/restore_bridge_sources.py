@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 
 from iptv_pilot.common.db import connect_database
-from iptv_pilot.sources.models import make_source, now, ordered_sources, url_key
+from iptv_pilot.sources.models import make_source, now, url_key
 
 BRIDGE_BASE = "http://192.168.31.251:4023/hls"
 ADDR_PATTERN = re.compile(r"/rtp/(238\.200\.200\.\d+:\d+)")
@@ -114,7 +114,6 @@ def apply(database, bridge_map: dict[str, str]) -> dict:
         existing = list(database.sources.find({"channel_id": channel_id}))
         bridge = next((item for item in existing if item.get("url") == bridge_url), None)
         if bridge is None:
-            priorities = [row.get("priority") or 0 for row in existing]
             bridge = make_source(
                 channel_id=channel_id,
                 url=bridge_url,

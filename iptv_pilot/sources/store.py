@@ -56,7 +56,6 @@ def sync_channel_mirror(database, channel: dict, rows: list[dict] | None = None)
     if not channel or not channel.get("channel_id"):
         return
     rows = rows if rows is not None else sources_for_channel(database, channel["channel_id"])
-    stored = {row.get("source_id"): row for row in rows}
     active = resolve_active(rows, channel)
     preferred = resolve_preferred(rows, channel)
     update: dict[str, Any] = {

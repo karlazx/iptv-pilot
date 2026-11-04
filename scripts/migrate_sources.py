@@ -21,7 +21,6 @@ from iptv_pilot.sources.models import (
     mirror_candidates,
     now,
     ordered_sources,
-    resolve_preferred,
     url_key,
 )
 from iptv_pilot.sources.store import sync_channel_mirror
