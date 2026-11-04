@@ -50,7 +50,7 @@ EPG_URLS=/data/m3u/epg/epg.xml
 
 ## 4. 配置可选 AI 功能
 
-默认配置使用 mock 后端，首次构建不安装大型 AI 依赖：
+默认配置使用 mock 后端，基础应用镜像不安装大型 AI 依赖：
 
 ```dotenv
 INSTALL_AI_DEPS=0
@@ -60,7 +60,27 @@ EMBEDDING_BACKEND=none
 LLM_PROVIDER=mock
 ```
 
-需要正式转写时，设置 `INSTALL_AI_DEPS=1` 并配置 faster-whisper。模型下载体积较大，第一次转写也会更慢。
+ASR 和 recorder 使用独立的 AI 镜像（构建参数固定为 `INSTALL_AI_DEPS=1`），因此拉取/更新基础应用镜像不会移除 faster-whisper 或 PyAV。默认使用本地镜像并设置 `pull_policy: never`：
+
+```dotenv
+IPTV_PILOT_AI_IMAGE=iptv-pilot-ai
+IPTV_PILOT_AI_TAG=local
+```
+
+首次启用或升级后构建 AI 镜像：
+
+```bash
+docker compose build asr recorder
+docker compose up -d asr recorder
+```
+
+需要配置 faster-whisper 时设置：
+
+```dotenv
+ASR_BACKEND=faster_whisper
+```
+
+模型体积较大，第一次转写也会更慢；可通过 `MODELS_PATH` 复用本地 Hugging Face 缓存，并用 `HF_HUB_OFFLINE=1` 避免联网检查。使用已发布的 AI 镜像时，设置 `IPTV_PILOT_AI_IMAGE=ghcr.io/karlazx/iptv-pilot`、`IPTV_PILOT_AI_TAG=<版本>-ai`。
 
 需要生成真实摘要时，配置任一受支持的 LLM Provider 及其 API Key。OpenAI 兼容的自定义服务使用 `LLM_PROVIDER=custom`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。
 

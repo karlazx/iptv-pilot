@@ -29,6 +29,21 @@ x-worker: &worker
       condition: service_completed_successfully
   networks: [iptv]
 
+# ASR and recorder need faster-whisper/PyAV.  Keep them on a separate image so
+# pulling an updated base app image can never silently remove AI dependencies.
+x-ai-worker: &ai-worker
+  <<: *worker
+  image: ${IPTV_PILOT_AI_IMAGE:-iptv-pilot-ai}:${IPTV_PILOT_AI_TAG:-local}
+  pull_policy: never
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      INSTALL_AI_DEPS: 1
+      INSTALL_FFMPEG: ${INSTALL_FFMPEG:-1}
+      INSTALL_EMBEDDING_DEPS: ${INSTALL_EMBEDDING_DEPS:-0}
+      PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.org/simple}
+
 services:
   mongodb:
     image: mongodb/mongodb-community-server:${MONGODB_SERVER_TAG:-8.2.0-ubi9}
@@ -217,7 +232,7 @@ services:
       RECORDING_POST_ROLL_SECONDS: ${RECORDING_POST_ROLL_SECONDS:-180}
 
   recorder:
-    <<: *worker
+    <<: *ai-worker
     command: ["python", "-m", "iptv_pilot.recorder.main"]
     environment:
       <<: *app-environment
@@ -231,7 +246,7 @@ services:
       - ${M3U_DATA_PATH:-/nas/iptv/m3u}:/data/m3u:ro
 
   asr:
-    <<: *worker
+    <<: *ai-worker
     command: ["python", "-m", "iptv_pilot.asr.main"]
     environment:
       <<: *app-environment
