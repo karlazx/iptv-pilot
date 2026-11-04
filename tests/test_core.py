@@ -14,7 +14,11 @@ from iptv_pilot.live_normalizer.main import (
     validate_segment_timeline,
 )
 from iptv_pilot.llm.providers import MockProvider, validate_summary
-from iptv_pilot.recorder.main import capture_stream, safe_name
+from iptv_pilot.recorder.main import (
+    _validate_captured_duration,
+    capture_stream,
+    safe_name,
+)
 from iptv_pilot.scheduler.main import matches
 from iptv_pilot.web.live import LiveProxyError, LiveTokenSigner, rewrite_hls_manifest
 from iptv_pilot.web.main import SubscriptionCreate, TimeRule
@@ -48,6 +52,27 @@ def test_mock_summary_shape():
 
 def test_safe_name():
     assert safe_name("新闻/联播:晚间") == "新闻_联播_晚间"
+
+
+def test_recording_duration_rejects_early_eof(monkeypatch, tmp_path):
+    monkeypatch.setattr("iptv_pilot.recorder.main.probe_media_duration", lambda _path: 10.1)
+    with pytest.raises(RuntimeError, match="ended early"):
+        _validate_captured_duration(tmp_path / "x.ts", 2036)
+
+
+def test_recording_duration_accepts_complete_capture(monkeypatch, tmp_path):
+    monkeypatch.setattr("iptv_pilot.recorder.main.probe_media_duration", lambda _path: 58.0)
+    assert _validate_captured_duration(tmp_path / "x.ts", 60) == 58.0
+
+
+def test_recording_duration_skips_short_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr("iptv_pilot.recorder.main.probe_media_duration", lambda _path: 10.0)
+    assert _validate_captured_duration(tmp_path / "x.ts", 30) == 10.0
+
+
+def test_recording_duration_skips_unprobeable(monkeypatch, tmp_path):
+    monkeypatch.setattr("iptv_pilot.recorder.main.probe_media_duration", lambda _path: None)
+    assert _validate_captured_duration(tmp_path / "x.ts", 600) is None
 
 
 def test_recorder_falls_back_to_pyav(monkeypatch, tmp_path):

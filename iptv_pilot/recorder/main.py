@@ -95,6 +95,20 @@ def probe_media_duration(path: Path) -> float | None:
     return None
 
 
+def _validate_captured_duration(path: Path, expected_seconds: int) -> float | None:
+    """Reject captures that ended far too early, e.g. when the upstream stream hit EOF."""
+    actual = probe_media_duration(path)
+    if actual is None or expected_seconds < 60:
+        return actual
+    configured = float(os.getenv("RECORDING_MIN_DURATION_RATIO", "0.8"))
+    minimum_ratio = min(1.0, max(0.1, configured))
+    if actual < expected_seconds * minimum_ratio:
+        raise RuntimeError(
+            f"recording ended early: captured {actual:.1f}s of {expected_seconds}s"
+        )
+    return actual
+
+
 def _epg_deviation_suspect(recording: dict, output_path: Path) -> bool:
     """Mark recordings whose real duration deviates >20% from the EPG-expected length."""
     end_time = recording.get("end_time")
@@ -128,6 +142,12 @@ def _capture_with_ffmpeg(source_url: str, output_path: Path, duration: int) -> N
         "warning",
         "-nostdin",
         "-y",
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
         "-i",
         source_url,
         "-t",
@@ -199,6 +219,7 @@ def process_recording(database, recording: dict) -> None:
         minimum = int(os.getenv("RECORDING_MIN_BYTES", "1048576"))
         if size < minimum:
             raise RuntimeError(f"recording too small: {size} bytes")
+        actual_duration = _validate_captured_duration(temporary_path, duration)
         temporary_path.replace(output_path)
     except Exception:
         temporary_path.unlink(missing_ok=True)
@@ -209,7 +230,7 @@ def process_recording(database, recording: dict) -> None:
             "$set": {
                 "status": "completed",
                 "file_path": str(output_path),
-                "duration_sec": duration,
+                "duration_sec": int(round(actual_duration)) if actual_duration else duration,
                 "size_bytes": size,
                 "capture_method": capture_method,
                 "completed_at": datetime.now(UTC),
