@@ -753,7 +753,7 @@ def channel_stream_options(channel_id: str) -> dict:
     )
     payload["manual"] = {"policy": payload["policy"]} if payload["policy"] == "manual" else None
     payload["candidates_urls"] = candidates
-    return payload
+    return serialize(payload)
 
 
 @app.get("/api/channels/{channel_id}/streams")
