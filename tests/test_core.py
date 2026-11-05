@@ -18,9 +18,12 @@ from iptv_pilot.recorder.main import (
     _capture_with_ffmpeg,
     _validate_captured_duration,
     capture_stream,
+    handle_failure,
+    max_per_channel,
+    recording_concurrency,
     safe_name,
 )
-from iptv_pilot.scheduler.main import matches
+from iptv_pilot.scheduler.main import matches, schedule_once
 from iptv_pilot.web.live import LiveProxyError, LiveTokenSigner, rewrite_hls_manifest
 from iptv_pilot.web.main import SubscriptionCreate, TimeRule
 from scripts.refresh_stream_quality import preferred_index, should_switch
@@ -74,6 +77,51 @@ def test_recording_duration_skips_short_windows(monkeypatch, tmp_path):
 def test_recording_duration_skips_unprobeable(monkeypatch, tmp_path):
     monkeypatch.setattr("iptv_pilot.recorder.main.probe_media_duration", lambda _path: None)
     assert _validate_captured_duration(tmp_path / "x.ts", 600) is None
+
+
+def test_recording_concurrency_is_clamped(monkeypatch):
+    monkeypatch.setenv("RECORDING_CONCURRENCY", "99")
+    assert recording_concurrency() == 8
+    monkeypatch.setenv("RECORDING_CONCURRENCY", "0")
+    assert recording_concurrency() == 1
+    monkeypatch.setenv("RECORDING_CONCURRENCY", "not-a-number")
+    assert recording_concurrency() == 2
+
+
+def test_per_channel_limit_never_exceeds_concurrency(monkeypatch):
+    monkeypatch.setenv("RECORDING_MAX_PER_CHANNEL", "8")
+    assert max_per_channel(3) == 3
+    monkeypatch.setenv("RECORDING_MAX_PER_CHANNEL", "0")
+    assert max_per_channel(3) == 1
+
+
+def test_recording_failure_is_fenced_by_claim_id(monkeypatch):
+    class Result:
+        matched_count = 0
+
+    class Recordings:
+        def __init__(self):
+            self.filters = []
+
+        def update_one(self, filter_, _update):
+            self.filters.append(filter_)
+            return Result()
+
+    class Database:
+        def __init__(self):
+            self.recordings = Recordings()
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    database = Database()
+    recording = {
+        "_id": "recording-1",
+        "claim_id": "stale-claim",
+        "retry_count": 0,
+        "scheduled_end": datetime.now(UTC) + timedelta(minutes=10),
+    }
+    handle_failure(database, recording, RuntimeError("boom"))
+    assert database.recordings.filters == [{"_id": "recording-1", "claim_id": "stale-claim"}]
+
 
 
 def test_ffmpeg_capture_uses_read_timeout_without_unbounded_reconnect(monkeypatch, tmp_path):
@@ -245,3 +293,64 @@ def test_stream_quality_prefers_runtime_clean_candidate():
     ]
     assert preferred_index(results) == 1
     assert not should_switch(results[1], results[0])
+
+
+def test_scheduler_dedupes_same_channel_and_start(monkeypatch):
+    start = datetime.now(UTC) + timedelta(minutes=5)
+
+    class Cursor(list):
+        pass
+
+    class Subscriptions:
+        def find(self, _filter):
+            return Cursor(
+                [
+                    {"_id": "sub-1", "match_type": "keyword", "keyword": "新闻", "enabled": True},
+                    {"_id": "sub-2", "match_type": "keyword", "keyword": "新闻", "enabled": True},
+                ]
+            )
+
+    class Programmes:
+        def find(self, _filter):
+            return Cursor(
+                [
+                    {
+                        "channel_id": "CCTV-1",
+                        "title": "新闻联播",
+                        "description": "",
+                        "start_time": start,
+                        "end_time": start + timedelta(minutes=30),
+                    }
+                ]
+            )
+
+    class Channels:
+        def distinct(self, _field, _filter):
+            return ["CCTV-1"]
+
+    class Recordings:
+        def __init__(self):
+            self.operations = []
+
+        def bulk_write(self, operations, ordered=False):
+            self.operations = operations
+            assert ordered is False
+
+            class Result:
+                upserted_count = 1
+
+            return Result()
+
+    class Database:
+        def __init__(self):
+            self.subscriptions = Subscriptions()
+            self.epg_programs = Programmes()
+            self.channels = Channels()
+            self.recordings = Recordings()
+
+    database = Database()
+    schedule_once(database)
+    assert len(database.recordings.operations) == 1
+    operation = database.recordings.operations[0]
+    assert operation._filter == {"channel_id": "CCTV-1", "start_time": start}
+    assert operation._doc["$addToSet"]["subscription_ids"]["$each"] == ["sub-1", "sub-2"]
