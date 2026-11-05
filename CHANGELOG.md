@@ -4,6 +4,16 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 
 ## 尚未发布
 
+## 0.1.0-rc.5 - 2026-11-05
+
+- 录制器支持并发：默认 2 路（`RECORDING_CONCURRENCY`），同频道默认 2 路（`RECORDING_MAX_PER_CHANNEL`）。
+- 认领任务增加 `claim_id` fencing、心跳和频道租约；worker 崩溃后可安全接管，旧 worker 不会覆盖新结果。
+- 过期窗口不再补录；同频道排队到窗口关闭仍无槽位时标记 `overlap_wait_timeout`。
+- 定时任务按 `(channel_id, start_time)` 去重，多订阅命中同一节目只录一份。
+- `/api/system/status` 暴露运行中/排队录制和 worker 明细；录像页每 10 秒刷新。
+- 新增 `scripts/migrate_recorder_concurrency.py` 索引与重复任务迁移脚本。
+- `recorder` 容器限制 2 GB 内存。
+
 ## 0.1.0-rc.4 - 2026-11-05
 
 - 新增 `sources` 集合：每个频道维护有序源列表，支持一个锁定的首选源和多条备用源。

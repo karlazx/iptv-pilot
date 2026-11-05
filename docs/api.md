@@ -31,7 +31,7 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 | GET | `/api/recordings/{id}/play` | 浏览器播放；TS 首次访问会转封装为 MP4，支持 Range/拖动 |
 | GET | `/api/recordings/{id}/download` | 下载原始录像文件 |
 | GET | `/api/push/events` | 推送事件审计 |
-| GET | `/api/system/status` | 频道、EPG、订阅和录制状态统计 |
+| GET | `/api/system/status` | 频道、EPG、订阅、录制状态统计，以及运行中的录制 worker |
 | GET/PATCH | `/api/settings/buffer` | 查询或更新直播缓冲档位 |
 | POST | `/api/bookmarks` | 新建或更新收藏 |
 | GET | `/api/bookmarks?user=default` | 收藏列表 |
