@@ -1268,6 +1268,21 @@ def set_buffer_profile(payload: BufferProfileUpdate) -> dict:
 
 @app.get("/api/system/status")
 def system_status() -> dict:
+    running = list(
+        database.recordings.find(
+            {"status": "recording"},
+            {
+                "channel_id": 1,
+                "program_title": 1,
+                "claimed_by": 1,
+                "claim_id": 1,
+                "recording_started_at": 1,
+                "heartbeat_at": 1,
+                "source_id": 1,
+            },
+        )
+    )
+    now = datetime.now(UTC)
     return {
         "channels": database.channels.count_documents({"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}),
         "epg_programs": database.epg_programs.count_documents({}),
@@ -1278,6 +1293,23 @@ def system_status() -> dict:
                 [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
             )
         },
+        "recordings_running": len(running),
+        "recordings_queued": database.recordings.count_documents(
+            {"status": "queued", "scheduled_start": {"$lte": now}}
+        ),
+        "recording_workers": [
+            {
+                "worker_id": recording.get("claimed_by"),
+                "claim_id": recording.get("claim_id"),
+                "recording_id": str(recording["_id"]),
+                "channel_id": recording.get("channel_id"),
+                "program_title": recording.get("program_title"),
+                "source_id": recording.get("source_id"),
+                "started_at": serialize(recording.get("recording_started_at")),
+                "heartbeat_at": serialize(recording.get("heartbeat_at")),
+            }
+            for recording in running
+        ],
         "latest_summary_at": serialize(
             (database.summaries.find_one(sort=[("created_at", -1)]) or {}).get("created_at")
         ),

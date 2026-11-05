@@ -1,3 +1,3 @@
 """IPTVPilot application package."""
 
-__version__ = "0.1.0rc4"
+__version__ = "0.1.0rc5"

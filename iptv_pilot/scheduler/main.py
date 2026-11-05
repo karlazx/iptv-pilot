@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from pymongo import UpdateOne
+from pymongo.errors import BulkWriteError
 
 from iptv_pilot.common.db import configure_logging, connect_database
 
@@ -63,42 +64,60 @@ def schedule_once(database) -> None:
     programmes = [row for row in programmes if row.get("channel_id") in enabled_channels]
     pre_roll = int(os.getenv("RECORDING_PRE_ROLL_SECONDS", "60"))
     default_post_roll = int(os.getenv("RECORDING_POST_ROLL_SECONDS", "180"))
-    operations: list[UpdateOne] = []
+    planned: dict[tuple[str, datetime], dict] = {}
     for subscription in subscriptions:
         post_roll = int(subscription.get("post_roll_seconds") or default_post_roll)
         for programme in programmes:
             if not matches(subscription, programme, os.getenv("TZ", "Asia/Shanghai")):
                 continue
-            operations.append(
-                UpdateOne(
-                    {
-                        "subscription_id": subscription["_id"],
-                        "start_time": programme["start_time"],
-                    },
-                    {
-                        "$setOnInsert": {
-                            "subscription_id": subscription["_id"],
-                            "channel_id": programme["channel_id"],
-                            "program_title": programme["title"],
-                            "start_time": programme["start_time"],
-                            "end_time": programme["end_time"],
-                            "scheduled_start": programme["start_time"] - timedelta(seconds=pre_roll),
-                            "scheduled_end": programme["end_time"] + timedelta(seconds=post_roll),
-                            "status": "queued",
-                            "retry_count": 0,
-                            "created_at": now,
-                            "asr_enabled": subscription.get("asr_enabled", True),
-                            "asr_model": subscription.get("asr_model", "small"),
-                            "llm_enabled": subscription.get("llm_enabled", True),
-                            "push_enabled": subscription.get("push_enabled", True),
-                            "auto_bookmark": subscription.get("auto_bookmark", False),
-                        }
-                    },
-                    upsert=True,
-                )
+            key = (programme["channel_id"], programme["start_time"])
+            existing = planned.get(key)
+            if existing is None:
+                planned[key] = {
+                    "subscription_id": subscription["_id"],
+                    "subscription_ids": [subscription["_id"]],
+                    "channel_id": programme["channel_id"],
+                    "program_title": programme["title"],
+                    "start_time": programme["start_time"],
+                    "end_time": programme["end_time"],
+                    "scheduled_start": programme["start_time"] - timedelta(seconds=pre_roll),
+                    "scheduled_end": programme["end_time"] + timedelta(seconds=post_roll),
+                    "status": "queued",
+                    "retry_count": 0,
+                    "created_at": now,
+                    "asr_enabled": subscription.get("asr_enabled", True),
+                    "asr_model": subscription.get("asr_model", "small"),
+                    "llm_enabled": subscription.get("llm_enabled", True),
+                    "push_enabled": subscription.get("push_enabled", True),
+                    "auto_bookmark": subscription.get("auto_bookmark", False),
+                }
+            elif subscription["_id"] not in existing["subscription_ids"]:
+                existing["subscription_ids"].append(subscription["_id"])
+    operations: list[UpdateOne] = []
+    for (channel_id, start_time), document in planned.items():
+        subscription_ids = document.pop("subscription_ids")
+        operations.append(
+            UpdateOne(
+                {"channel_id": channel_id, "start_time": start_time},
+                {
+                    "$setOnInsert": document,
+                    "$addToSet": {"subscription_ids": {"$each": subscription_ids}},
+                },
+                upsert=True,
             )
+        )
     if operations:
-        result = database.recordings.bulk_write(operations, ordered=False)
+        try:
+            result = database.recordings.bulk_write(operations, ordered=False)
+        except BulkWriteError as exc:
+            # The legacy unique (subscription_id, start_time) index can reject a
+            # keyword subscription that matches two channels at the same time
+            # until migrate_recorder_concurrency.py has been run.
+            logger.error(
+                "scheduled recordings bulk write failed; run migrate_recorder_concurrency: %s",
+                exc.details.get("writeErrors", exc.details),
+            )
+            return
         logger.info("scheduled recordings upserted=%s", result.upserted_count)
 
 
