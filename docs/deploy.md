@@ -162,7 +162,31 @@ docker compose --profile hardware-accel up -d --build
 
 MongoDB 和 MongoDB Search 端口不得发布到宿主机或公网。
 
-## 9. 备份与清理
+## 9. 录制并发
+
+录制器默认同时处理 2 路任务，可在 `.env` 调整：
+
+```dotenv
+RECORDING_CONCURRENCY=2          # 1-8，整个容器同时录制的任务数
+RECORDING_MAX_PER_CHANNEL=2      # 同一频道最多同时录制几路
+RECORDING_LEASE_SECONDS=120      # 认领租约；心跳丢失超过 2 倍即允许接管
+RECORDING_HEARTBEAT_SECONDS=30
+RECORDING_LATE_GRACE_SECONDS=300 # 节目结束后多久不再补录
+RECORDING_MIN_WINDOW_SECONDS=60  # 剩余窗口不足时不再重试
+```
+
+`recorder` 默认限制 2 GB 内存。每路录制是 `-c copy` 转封装，不转码；4 路以上请先确认磁盘写入和内存余量。
+
+同一频道允许 2 路重叠录制（udpxy/桥接支持多客户端）。达到上限的第三条任务会保持排队，若到窗口结束前仍无槽位则标记 `failed` 并写入 `skip_reason="overlap_wait_timeout"`。心跳停止或容器退出的任务由监督循环回收；终态更新带 `claim_id` fencing，旧 worker 不会覆盖新 worker 的结果。
+
+升级后执行一次索引迁移（可先 dry-run）：
+
+```bash
+docker compose run --rm --no-deps recorder python -m scripts.migrate_recorder_concurrency --dry-run
+docker compose run --rm --no-deps recorder python -m scripts.migrate_recorder_concurrency --apply --merge
+```
+
+## 10. 备份与清理
 
 执行数据库备份：
 
@@ -178,7 +202,7 @@ docker compose --profile maintenance run --rm cleanup-recordings
 
 应先完成一次手工备份和恢复演练，再配置计划任务。数据库备份不包含录像文件，录像需要独立的存储备份策略。
 
-## 10. 升级流程
+## 11. 升级流程
 
 项目为基础镜像和配套服务提供了固定的默认版本，避免 `latest` 在无人确认时引入不兼容改动。尤其是 iptv-api 3.x 包含配置变化，升级前应先阅读其发布说明并在独立环境验证。
 

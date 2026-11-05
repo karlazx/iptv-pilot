@@ -457,14 +457,19 @@ async function openSubscriptionForm(existing = null, preset = {}) {
 
 async function renderRecordings() {
   const [recordings, channels, bookmarks] = await Promise.all([api("/api/recordings?limit=200"), loadChannels(), loadBookmarks()]);
+  const renderToken = appState.renderToken;
   $("#view").innerHTML = `
     ${pageIntro("追踪从排队、录制、转写、摘要到邮件推送的完整处理状态。", '<button class="button" id="manual-recording" type="button">● 手工录制</button>')}
-    <div class="toolbar"><label class="field"><span>状态筛选</span><select class="select" id="recording-filter"><option value="">全部状态</option>${Object.entries(statusMeta).map(([key, meta]) => `<option value="${key}">${meta[0]}</option>`).join("")}</select></label><div class="grow"></div><span class="badge" id="recording-count">${recordings.length} 条</span></div>
+    <div class="toolbar"><label class="field"><span>状态筛选</span><select class="select" id="recording-filter"><option value="">全部状态</option>${Object.entries(statusMeta).map(([key, meta]) => `<option value="${key}">${meta[0]}</option>`).join("")}</select></label><div class="grow"></div><span class="badge danger" id="recording-live"></span><span class="badge" id="recording-count">${recordings.length} 条</span></div>
     <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>节目</th><th>时间</th><th>状态</th><th>文件</th><th></th></tr></thead><tbody id="recording-body"></tbody></table></div></section>`;
   const renderRows = () => {
     const filter = $("#recording-filter").value;
     const rows = recordings.filter(row => !filter || row.status === filter);
+    const running = recordings.filter(row => row.status === "recording").length;
     $("#recording-count").textContent = `${rows.length} 条`;
+    const liveBadge = $("#recording-live");
+    liveBadge.textContent = running ? `录制中 ${running}` : "";
+    liveBadge.style.display = running ? "" : "none";
     $("#recording-body").innerHTML = rows.length ? rows.map(row => {
       const saved = Boolean(bookmarkFor("recording", row._id));
       const playable = Boolean(row.file_path) && !["queued","recording","failed"].includes(row.status);
@@ -472,7 +477,25 @@ async function renderRecordings() {
       return `<tr><td><strong>${esc(row.program_title)}</strong><small>${esc(row.channel_id)}${row.manual ? " · 手工" : ""}${row.epg_time_suspect ? " · EPG时间存疑" : ""}</small></td><td>${esc(formatDateTime(row.start_time))}</td><td>${incomplete}${badge(row.status)}</td><td>${esc(formatBytes(row.size_bytes))}</td><td><div class="table-actions"><button class="button small ghost" data-watch-channel="${esc(row.channel_id)}">直播</button><button class="button small secondary" data-recording-detail="${esc(row._id)}">详情</button>${playable ? `<button class="button small secondary" data-play="${esc(row._id)}" data-title="${esc(row.program_title)}">播放</button>` : ""}<button class="button small ghost" data-bookmark-recording="${esc(row._id)}">${saved ? "♥" : "♡"}</button></div></td></tr>`;
     }).join("") : `<tr><td colspan="5">${emptyState("暂无记录", "当前筛选条件下没有录制。", true)}</td></tr>`;
   };
+  const scheduleRefresh = () => {
+    clearTimeout(appState.recordingRefreshTimer);
+    const active = recordings.some(row => ["recording", "queued"].includes(row.status));
+    if (!active) return;
+    appState.recordingRefreshTimer = setTimeout(async () => {
+      if (appState.renderToken !== renderToken) return;
+      try {
+        const latest = await api("/api/recordings?limit=200");
+        recordings.length = 0;
+        recordings.push(...latest);
+        renderRows();
+        scheduleRefresh();
+      } catch (_error) {
+        scheduleRefresh();
+      }
+    }, 10000);
+  };
   renderRows();
+  scheduleRefresh();
   $("#recording-filter").addEventListener("change", renderRows);
   $("#manual-recording").addEventListener("click", () => openManualRecording(channels));
   $("#recording-body").addEventListener("click", async event => {

@@ -41,8 +41,11 @@ appDb.epg_programs.createIndex({start_time: 1}, {expireAfterSeconds: 7776000, na
 appDb.epg_programs.createIndex({title: "text", description: "text"}, {name: "epg_text", default_language: "none"});
 appDb.subscriptions.createIndex({match_type: 1, enabled: 1}, {name: "subscription_match"});
 appDb.recordings.createIndex({status: 1, scheduled_start: 1}, {name: "recording_queue"});
+appDb.recordings.createIndex({status: 1, heartbeat_at: 1}, {name: "recording_heartbeat"});
+appDb.recordings.createIndex({claim_id: 1}, {name: "recording_claim", sparse: true});
+appDb.recordings.createIndex({channel_id: 1, start_time: 1}, {name: "recording_channel_start"});
 appDb.recordings.createIndex({subscription_id: 1, start_time: -1}, {name: "subscription_history"});
-appDb.recordings.createIndex({subscription_id: 1, start_time: 1}, {unique: true, name: "recording_dedupe"});
+appDb.recordings.createIndex({subscription_id: 1, start_time: 1}, {name: "recording_subscription_start"});
 appDb.transcripts.createIndex({recording_id: 1}, {unique: true, name: "transcript_recording_unique"});
 appDb.summaries.createIndex({recording_id: 1}, {unique: true, name: "summary_recording_unique"});
 appDb.summaries.createIndex({pushed: 1, created_at: -1}, {name: "summary_push_queue"});
