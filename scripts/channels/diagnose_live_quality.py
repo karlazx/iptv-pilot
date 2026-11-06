@@ -19,13 +19,46 @@ HEADERS = {
     "User-Agent": "IPTVPilot/1.0",
 }
 
+# An IPTV playlist is a few kilobytes. Anything larger is a video file or an
+# error page, and reading it would allocate the whole response in memory: a
+# 1.85 GB MP4 mistaken for a playlist exhausted a 1 GB container in testing.
+MAX_PLAYLIST_BYTES = 2 * 1024 * 1024
+# HLS media segments are bounded by the playlist's TARGETDURATION; 64 MiB is a
+# generous ceiling that still refuses a mislabelled feature-length video.
+MAX_SEGMENT_BYTES = 64 * 1024 * 1024
+
+
+class PlaylistTooLarge(ValueError):
+    """The response is not a playlist and must not be buffered."""
+
+
+def read_playlist(client: httpx.Client, url: str) -> tuple[str, float]:
+    """Stream a playlist with a hard byte cap, returning (text, seconds)."""
+    started = time.perf_counter()
+    with client.stream("GET", url, headers=HEADERS) as response:
+        response.raise_for_status()
+        content_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if content_type.startswith(("video/", "audio/")):
+            raise PlaylistTooLarge(f"not a playlist: content-type {content_type}")
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_PLAYLIST_BYTES:
+            raise PlaylistTooLarge(f"playlist too large: {int(declared)} bytes")
+        body = bytearray()
+        for chunk in response.iter_bytes():
+            body.extend(chunk)
+            if len(body) > MAX_PLAYLIST_BYTES:
+                raise PlaylistTooLarge(f"playlist exceeded {MAX_PLAYLIST_BYTES} bytes")
+        elapsed = time.perf_counter() - started
+        resolved = str(response.url)
+        encoding = response.encoding or "utf-8"
+    text = body.decode(encoding, errors="replace")
+    if text.lstrip() and not text.lstrip().startswith("#"):
+        raise PlaylistTooLarge("response is not an HLS playlist")
+    return text, elapsed, resolved
+
 
 def media_segments(client: httpx.Client, url: str, depth: int = 0):
-    started = time.perf_counter()
-    response = client.get(url, headers=HEADERS)
-    response.raise_for_status()
-    playlist_seconds = time.perf_counter() - started
-    text = response.text
+    text, playlist_seconds, resolved = read_playlist(client, url)
     segments = []
     duration = None
     variants = []
@@ -41,7 +74,7 @@ def media_segments(client: httpx.Client, url: str, depth: int = 0):
                 0,
             )
         elif line and not line.startswith("#"):
-            absolute = urljoin(str(response.url), line)
+            absolute = urljoin(resolved, line)
             if duration is not None:
                 segments.append((absolute, duration))
                 duration = None
@@ -64,14 +97,21 @@ def benchmark(client: httpx.Client, url: str, sample_count: int) -> dict:
     samples = []
     for segment_url, duration in segments[-sample_count:]:
         started = time.perf_counter()
-        response = client.get(segment_url, headers=HEADERS)
-        response.raise_for_status()
+        size = 0
+        with client.stream("GET", segment_url, headers=HEADERS) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > MAX_SEGMENT_BYTES:
+                    raise PlaylistTooLarge(
+                        f"segment exceeded {MAX_SEGMENT_BYTES} bytes; not a live HLS segment"
+                    )
         elapsed = time.perf_counter() - started
         samples.append(
             {
                 "duration_seconds": round(duration, 3),
                 "download_seconds": round(elapsed, 3),
-                "size_mib": round(len(response.content) / 1048576, 2),
+                "size_mib": round(size / 1048576, 2),
                 "download_ratio": round(elapsed / duration, 3),
             }
         )

@@ -215,3 +215,85 @@ def test_ninety_seven_percent_is_accepted_as_a_complete_encode():
     # The 490s-vs-503s case that the 0.98 threshold wrongly rejected.
     expected, actual = 503.0, 490.0
     assert actual >= expected * 0.95
+
+
+class _FakeStream:
+    def __init__(self, *, content_type: str, body: bytes, length: int | None = None):
+        self.headers = {"content-type": content_type}
+        if length is not None:
+            self.headers["content-length"] = str(length)
+        self._body = body
+        self.encoding = "utf-8"
+        self.url = "http://example.test/playlist.m3u8"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_bytes(self):
+        yield self._body
+
+
+class _FakeClient:
+    def __init__(self, response):
+        self._response = response
+
+    def stream(self, _method, _url, headers=None):
+        return self._response
+
+
+def test_playlist_guard_rejects_video_content_type():
+    from scripts.channels.diagnose_live_quality import PlaylistTooLarge, read_playlist
+
+    client = _FakeClient(_FakeStream(content_type="video/mp4", body=b"\x00" * 64))
+    with pytest.raises(PlaylistTooLarge, match="not a playlist"):
+        read_playlist(client, "http://example.test/a.mp4")
+
+
+def test_playlist_guard_rejects_declared_oversize():
+    from scripts.channels.diagnose_live_quality import (
+        MAX_PLAYLIST_BYTES,
+        PlaylistTooLarge,
+        read_playlist,
+    )
+
+    client = _FakeClient(
+        _FakeStream(
+            content_type="application/vnd.apple.mpegurl",
+            body=b"",
+            length=MAX_PLAYLIST_BYTES + 1,
+        )
+    )
+    with pytest.raises(PlaylistTooLarge, match="too large"):
+        read_playlist(client, "http://example.test/a.m3u8")
+
+
+def test_playlist_guard_stops_streaming_past_the_cap():
+    from scripts.channels.diagnose_live_quality import PlaylistTooLarge, read_playlist
+
+    body = b"#EXTM3U\n" + b"# filler\n" * 400_000
+    client = _FakeClient(_FakeStream(content_type="text/plain", body=body))
+    with pytest.raises(PlaylistTooLarge, match="exceeded"):
+        read_playlist(client, "http://example.test/a.m3u8")
+
+
+def test_playlist_guard_accepts_a_real_playlist():
+    from scripts.channels.diagnose_live_quality import read_playlist
+
+    body = b"#EXTM3U\n#EXTINF:2.0,\nseg_00001.ts\n"
+    client = _FakeClient(_FakeStream(content_type="application/vnd.apple.mpegurl", body=body))
+    text, _elapsed, _url = read_playlist(client, "http://example.test/a.m3u8")
+    assert text.startswith("#EXTM3U")
+
+
+def test_playlist_guard_rejects_non_playlist_body():
+    from scripts.channels.diagnose_live_quality import PlaylistTooLarge, read_playlist
+
+    client = _FakeClient(_FakeStream(content_type="text/html", body=b"<html>error</html>"))
+    with pytest.raises(PlaylistTooLarge, match="not an HLS playlist"):
+        read_playlist(client, "http://example.test/a.m3u8")
