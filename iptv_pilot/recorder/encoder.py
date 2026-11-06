@@ -89,8 +89,10 @@ def encode_command(source: Path, output: Path, settings: dict) -> list[str]:
     ]
     height = int(settings.get("height") or 0)
     if height > 0:
-        # -2 keeps the width even, as required by yuv420p.
-        command += ["-vf", f"scale=-2:{height}"]
+        # -2 keeps the width even (required by yuv420p). `min(...,ih)` caps the
+        # height without upscaling SD channels, which would only cost bitrate.
+        # The comma is escaped because ffmpeg parses the filtergraph itself.
+        command += ["-vf", f"scale=-2:min({height}\\,ih)"]
     command += [
         "-c:v",
         "libx264",
