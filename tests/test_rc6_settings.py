@@ -120,11 +120,12 @@ def test_source_group_falls_back_to_origin_labels():
     assert _source_group({"origin": "custom", "kind": "custom"})["label"] == "用户自定义"
 
 
-def test_encode_command_caps_height_and_uses_aac():
+def test_encode_command_caps_height_and_uses_aac(monkeypatch):
     from pathlib import Path
 
     from iptv_pilot.recorder.encoder import encode_command
 
+    monkeypatch.setenv("FFMPEG_BIN", "ffmpeg")
     command = encode_command(
         Path("/r/a.ts"),
         Path("/r/a.mp4"),
@@ -137,11 +138,12 @@ def test_encode_command_caps_height_and_uses_aac():
     assert "mp4" in command
 
 
-def test_encode_command_keeps_native_resolution_when_disabled():
+def test_encode_command_keeps_native_resolution_when_disabled(monkeypatch):
     from pathlib import Path
 
     from iptv_pilot.recorder.encoder import encode_command
 
+    monkeypatch.setenv("FFMPEG_BIN", "ffmpeg")
     command = encode_command(Path("/r/a.ts"), Path("/r/a.mp4"), {"height": 0, "crf": 23})
     assert "scale=-2:0" not in command
     assert "-vf" not in command
