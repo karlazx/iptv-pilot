@@ -7,7 +7,8 @@ from datetime import UTC, datetime, timedelta
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from iptv_pilot.common.db import configure_logging, connect_database, run_forever
-from iptv_pilot.push.providers import configured_channels, create_providers
+from iptv_pilot.push.providers import create_providers
+from iptv_pilot.push.settings import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +49,13 @@ def run_once(database) -> None:
     if not summary:
         return
     try:
-        channels = configured_channels()
+        config = load_config(database)
+        channels = config["channels"]
         if "coze_query" in channels:
             record_event(database, summary["_id"], "coze_query", "ready")
         delivered: list[str] = []
         failures: list[str] = []
-        providers = create_providers()
+        providers = create_providers(channels, config)
         email_mode = os.getenv("PUSH_EMAIL_MODE", "fallback").lower()
         coze_succeeded = False
         for provider in providers:
@@ -94,7 +96,7 @@ def run_once(database) -> None:
     except Exception as exc:
         retry_count = int(summary.get("push_retry_count", 0)) + 1
         maximum = int(os.getenv("PUSH_MAX_RETRIES", "3"))
-        for channel in configured_channels():
+        for channel in load_config(database)["channels"]:
             if channel != "coze_query":
                 record_event(database, summary["_id"], channel, "failed", str(exc)[:2000])
         update = {

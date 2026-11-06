@@ -33,6 +33,11 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 | GET | `/api/push/events` | 推送事件审计 |
 | GET | `/api/system/status` | 频道、EPG、订阅、录制状态统计，以及运行中的录制 worker |
 | GET/PATCH | `/api/settings/buffer` | 查询或更新直播缓冲档位 |
+| GET/PATCH | `/api/settings/push` | 查询或更新推送渠道与 SMTP 配置（密码不回显） |
+| POST | `/api/settings/push/test` | 用当前配置发送一封测试邮件 |
+| GET/PATCH | `/api/settings/recording` | 查询或更新录制压缩（分辨率 / CRF / 是否保留原文件） |
+| POST | `/api/channels` | 新建频道，`sources[]` 可一次提交多条线路，第一条锁定为首选 |
+| PUT | `/api/channels/{id}/sources` | 用提交的线路列表替换该频道用户自建线路，并指定首选 |
 | POST | `/api/bookmarks` | 新建或更新收藏 |
 | GET | `/api/bookmarks?user=default` | 收藏列表 |
 | DELETE | `/api/bookmarks/{id}` | 取消收藏 |

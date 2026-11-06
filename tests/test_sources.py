@@ -304,3 +304,31 @@ http://example.com/unknown.m3u8
     actions = {row["url"]: row["action"] for row in preview["rows"]}
     assert actions["http://example.com/new.m3u8"] == "exists"
     assert actions["http://example.com/unknown.m3u8"] == "unbound"
+
+
+def test_replace_user_sources_keeps_synced_rows_and_sets_primary():
+    seed = source("http://seed", source_id="s-seed", origin="seed", priority=0)
+    custom = source("http://custom", source_id="s-custom", origin="custom", priority=1)
+    backup = source("http://backup", source_id="s-backup", origin="custom", priority=2)
+    db = FakeDatabase(
+        channels=[channel(m3u_url="http://seed", stream_candidates=["http://seed"])],
+        sources=[seed, custom, backup],
+    )
+    result = store.replace_user_sources(
+        db,
+        "C1",
+        [{"url": "http://seed", "name": "内置"}, {"url": "http://backup", "name": "备用"}],
+        primary_index=0,
+    )
+    assert result["preferred_source_id"] == "s-seed"
+    # ``http://custom`` was user-created and is absent from the new list.
+    assert result["removed"] == 1
+    assert [row["source_id"] for row in db.sources.rows] == ["s-seed", "s-backup"]
+    assert db.channels.rows[0]["preferred_source_id"] == "s-seed"
+
+
+def test_replace_user_sources_rejects_unknown_channel():
+    import pytest
+
+    with pytest.raises(KeyError):
+        store.replace_user_sources(FakeDatabase(), "missing", [{"url": "http://x", "name": ""}])
