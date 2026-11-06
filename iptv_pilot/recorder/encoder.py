@@ -254,20 +254,25 @@ def encode_recording(database, recording: dict, settings: dict) -> None:
         settings.get("height"),
         settings.get("crf"),
     )
+    # Historical rows stored the requested window in ``duration_sec``, which can
+    # be far longer than the media if the upstream ended early. Validate against
+    # the source file itself whenever it can be probed.
+    expected = probe_duration(source)
+    if not expected:
+        expected = float(recording.get("duration_sec") or 0)
     started = time.monotonic()
     try:
         subprocess.run(
             encode_command(source, temporary, settings),
             check=True,
-            timeout=max(600, int(recording.get("duration_sec") or 0) * 30),
+            timeout=max(600, int(expected or recording.get("duration_sec") or 0) * 30),
         )
     except Exception as exc:
         temporary.unlink(missing_ok=True)
         _fail(database, recording, claim_id, f"encode failed: {exc}")
         return
-    expected = float(recording.get("duration_sec") or 0)
     actual = probe_duration(temporary)
-    if expected and actual and actual < expected * 0.8:
+    if expected and actual and actual < expected * 0.98:
         temporary.unlink(missing_ok=True)
         _fail(
             database,
