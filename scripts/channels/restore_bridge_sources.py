@@ -8,8 +8,8 @@ bridge playlist (``4022/rtp/<addr>`` -> ``4023/hls/<addr>/index.m3u8``), adds it
 back as a locked primary source, and keeps the third-party URL as a backup.
 
 Usage:
-    python -m scripts.restore_bridge_sources --dry-run
-    python -m scripts.restore_bridge_sources --apply
+    python -m scripts.channels.restore_bridge_sources --dry-run
+    python -m scripts.channels.restore_bridge_sources --apply
 """
 
 from __future__ import annotations

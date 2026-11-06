@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import httpx
 
 from iptv_pilot.common.db import connect_database
-from scripts.diagnose_live_quality import HEADERS, benchmark
+from scripts.channels.diagnose_live_quality import HEADERS, benchmark
 
 
 def safe_error(exc: Exception) -> str:

@@ -350,7 +350,7 @@ def test_replace_user_sources_rejects_unknown_channel():
 
 
 def test_seed_sync_disables_legacy_channel_removed_from_m3u():
-    from scripts.seed_channels import sync_channels
+    from scripts.channels.seed_channels import sync_channels
 
     legacy = {"channel_id": "GONE", "name": "已下线", "enabled": True}
     kept = {"channel_id": "KEPT", "name": "保留", "enabled": True}

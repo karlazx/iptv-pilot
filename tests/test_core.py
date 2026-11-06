@@ -26,7 +26,7 @@ from iptv_pilot.recorder.main import (
 from iptv_pilot.scheduler.main import matches, schedule_once
 from iptv_pilot.web.live import LiveProxyError, LiveTokenSigner, rewrite_hls_manifest
 from iptv_pilot.web.main import SubscriptionCreate, TimeRule
-from scripts.refresh_stream_quality import preferred_index, should_switch
+from scripts.channels.refresh_stream_quality import preferred_index, should_switch
 
 
 def test_package_version_matches_metadata():
