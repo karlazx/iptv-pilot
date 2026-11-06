@@ -114,6 +114,7 @@ def test_source_group_falls_back_to_origin_labels():
     from iptv_pilot.web.main import _source_group
 
     assert _source_group({"provider": "官方组播"})["key"] == "官方组播"
+    assert _source_group({"provider": "iptv-api"})["label"] == "IPTV-API 同步"
     assert _source_group({"origin": "seed"})["label"] == "IPTV-API 同步"
     assert _source_group({"origin": "import"})["label"] == "M3U 导入"
     assert _source_group({"origin": "migration", "kind": "udpxy"})["label"] == "官方组播桥接"

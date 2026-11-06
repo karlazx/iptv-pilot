@@ -627,7 +627,9 @@ def _source_group(row: dict) -> dict[str, str]:
     origin = row.get("origin") or "custom"
     kind = row.get("kind") or ""
     if provider:
-        key, label = provider, provider
+        # The seed script writes the raw provider id; show its friendly name and
+        # keep every IPTV-API batch in one group.
+        key, label = ("iptv-api", "IPTV-API 同步") if provider.lower() == "iptv-api" else (provider, provider)
     elif origin == "seed":
         key, label = "iptv-api", "IPTV-API 同步"
     elif kind == "udpxy":
