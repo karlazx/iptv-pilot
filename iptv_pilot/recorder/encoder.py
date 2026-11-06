@@ -272,7 +272,10 @@ def encode_recording(database, recording: dict, settings: dict) -> None:
         _fail(database, recording, claim_id, f"encode failed: {exc}")
         return
     actual = probe_duration(temporary)
-    if expected and actual and actual < expected * 0.98:
+    # Re-encoding drops trailing partial frames, and the container duration is
+    # rounded to whole seconds, so a healthy output can be a few percent short.
+    # A truncated or failed transcode loses far more than this.
+    if expected and actual and actual < expected * duration_tolerance():
         temporary.unlink(missing_ok=True)
         _fail(
             database,
@@ -381,6 +384,15 @@ def reclaim_orphans(database, apply: bool = True) -> int:
             )
         reclaimed += 1
     return reclaimed
+
+
+def duration_tolerance() -> float:
+    """Fraction of the source duration a valid transcode must retain."""
+    try:
+        value = float(os.getenv("RECORDING_ENCODE_MIN_DURATION_RATIO", "0.95"))
+    except ValueError:
+        value = 0.95
+    return min(1.0, max(0.5, value))
 
 
 def encode_heartbeat_seconds() -> int:
