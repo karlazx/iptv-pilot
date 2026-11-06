@@ -4,6 +4,13 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 
 ## 尚未发布
 
+## 0.1.0-rc.8 - 2026-11-06
+
+- 修复频道检测无限制下载的问题：播放列表改为流式读取并限制 2 MiB，拒绝 `video/*` / `audio/*` 内容类型和非 HLS 响应；分片下载限制 64 MiB。
+- 实测确认：1.85 GB 的 MP4 被误当作直播源时，修复前会使 1 GB 容器 OOM，修复后 0.2 秒拒绝、峰值 4.1 MB。
+- 检测失败的提示改为可读原因（如 `not a playlist: content-type video/mp4`）。
+- 新增 `docs/incidents/2026-11-06-docker-memory-pressure.md`，记录本次整机内存耗尽故障的时间线与证据。
+
 ## 0.1.0-rc.7 - 2026-11-06
 
 - 仓库整理：根目录只保留构建入口、README、LICENSE、CHANGELOG 和配置样例；社区文档移入 `.github/`，路线图与第三方声明移入 `docs/`。
