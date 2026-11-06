@@ -348,6 +348,58 @@ def requeue_pending(database) -> int:
     return result.modified_count
 
 
+def reclaim_orphans(database, apply: bool = True) -> int:
+    """Requeue claims whose worker is gone and drop its temporary file.
+
+    A transcode can outlive its worker when the container is recreated during
+    an upgrade. The lease alone would eventually expire, but the orphaned
+    ``.encoding.mp4`` would keep its disk space until then. A claim is treated
+    as orphaned once its heartbeat is older than one heartbeat interval -
+    workers refresh it every few seconds.
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=encode_heartbeat_seconds() * 3)
+    reclaimed = 0
+    for recording in database.recordings.find(
+        {"encode_status": "encoding", "encode_heartbeat_at": {"$lt": cutoff}}
+    ):
+        source = Path(recording.get("file_path") or "")
+        temporary = source.with_suffix(".encoding.mp4")
+        logger.warning(
+            "reclaiming orphaned encode id=%s worker=%s temporary=%s",
+            recording["_id"],
+            recording.get("encode_worker"),
+            temporary,
+        )
+        if apply:
+            temporary.unlink(missing_ok=True)
+            database.recordings.update_one(
+                {"_id": recording["_id"], "encode_status": "encoding"},
+                {
+                    "$set": {"encode_status": "pending", "next_encode_attempt_at": None},
+                    "$unset": {"encode_claim_id": "", "encode_worker": ""},
+                },
+            )
+        reclaimed += 1
+    return reclaimed
+
+
+def encode_heartbeat_seconds() -> int:
+    return _env_int("RECORDING_ENCODE_HEARTBEAT_SECONDS", 30, 5)
+
+
+def heartbeat_loop(database, stop: threading.Event) -> None:
+    """Keep ``encode_heartbeat_at`` fresh for every claim of this worker."""
+    interval = encode_heartbeat_seconds()
+    while not stop.wait(interval):
+        try:
+            database.recordings.update_many(
+                {"encode_status": "encoding", "encode_worker": WORKER_ID},
+                {"$set": {"encode_heartbeat_at": datetime.now(UTC)}},
+            )
+        except Exception:
+            logger.warning("encode heartbeat failed", exc_info=True)
+
+
 def run_once(database) -> bool:
     settings = load_settings(database)
     if not settings.get("enabled"):
@@ -368,7 +420,12 @@ def main() -> None:
         queued = requeue_pending(database)
         if queued:
             logger.info("encoder queued recordings count=%s", queued)
+    reclaimed = reclaim_orphans(database)
+    if reclaimed:
+        logger.info("encoder reclaimed orphaned jobs count=%s", reclaimed)
     stop = threading.Event()
+    heartbeat = threading.Thread(target=heartbeat_loop, args=(database, stop), daemon=True)
+    heartbeat.start()
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="encode") as pool:
         futures = set()
         while not stop.is_set():
