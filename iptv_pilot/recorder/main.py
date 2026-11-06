@@ -17,6 +17,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from iptv_pilot.common.db import configure_logging, connect_database
+from iptv_pilot.recorder.encoding import load_settings as load_encode_settings
 
 logger = logging.getLogger(__name__)
 RECORDING_ROOT = Path("/data/recordings")
@@ -430,6 +431,7 @@ def _resolve_recording_source(database, channel: dict) -> dict:
 
 def process_recording(database, recording: dict) -> None:
     claim_id = recording.get("claim_id")
+    encode_settings = load_encode_settings(database)
     channel = database.channels.find_one({"channel_id": recording["channel_id"], "enabled": True, "disabled": {"$ne": True}})
     if not channel:
         raise RuntimeError(f"no enabled stream URL for channel {recording['channel_id']}")
@@ -500,6 +502,9 @@ def process_recording(database, recording: dict) -> None:
                     "error": None,
                     "skip_reason": None,
                     "epg_time_suspect": epg_suspect,
+                    "encode_status": "pending" if encode_settings.get("enabled") else "disabled",
+                    "encode_retry_count": 0,
+                    "next_encode_attempt_at": None,
                 }
             },
         )

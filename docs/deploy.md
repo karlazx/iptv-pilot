@@ -82,27 +82,13 @@ ASR_BACKEND=faster_whisper
 
 模型体积较大，第一次转写也会更慢；可通过 `MODELS_PATH` 复用本地 Hugging Face 缓存，并用 `HF_HUB_OFFLINE=1` 避免联网检查。使用已发布的 AI 镜像时，设置 `IPTV_PILOT_AI_IMAGE=ghcr.io/karlazx/iptv-pilot`、`IPTV_PILOT_AI_TAG=<版本>-ai`，并把 `IPTV_PILOT_AI_PULL_POLICY` 改为 `missing`（本地构建保持 `never`）。
 
-Web 播放镜像同样默认使用本地镜像并设置 `pull_policy: never`，避免 `docker compose pull` 覆盖掉带 ffmpeg 的播放镜像：
-
-```dotenv
-IPTV_PILOT_WEB_IMAGE=iptv-pilot-web
-IPTV_PILOT_WEB_TAG=local
-```
-
-构建 Web 镜像：
-
-```bash
-docker compose build web
-docker compose up -d web
-```
-
-使用已发布的 Web 镜像时，设置 `IPTV_PILOT_WEB_IMAGE=ghcr.io/karlazx/iptv-pilot`、`IPTV_PILOT_WEB_TAG=<版本>-web`，并把 `IPTV_PILOT_WEB_PULL_POLICY` 改为 `missing`（本地构建保持 `never`）。
+Web 服务与其它 worker 共用基础镜像，其中已包含 imageio-ffmpeg，可直接在浏览器播放录像，不再需要单独的 `-web` 镜像。
 
 需要生成真实摘要时，配置任一受支持的 LLM Provider 及其 API Key。OpenAI 兼容的自定义服务使用 `LLM_PROVIDER=custom`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。
 
 向量搜索默认关闭。启用 BGE-M3 需要设置 `INSTALL_EMBEDDING_DEPS=1`，会增加镜像构建时间、模型磁盘占用和运行内存。
 
-通知默认关闭。需要邮件通知时，设置 `PUSH_PROVIDER=email` 并配置自己的 SMTP 服务。
+通知默认关闭。可在管理台「通用设置 → 推送配置」里选择渠道并填写 SMTP，保存后即时生效；也可继续用环境变量 `PUSH_PROVIDER` / `SMTP_*` 作为初始默认值。
 
 ## 5. 验证并启动
 
@@ -185,6 +171,21 @@ RECORDING_MIN_WINDOW_SECONDS=60  # 剩余窗口不足时不再重试
 docker compose run --rm --no-deps recorder python -m scripts.migrate_recorder_concurrency --dry-run
 docker compose run --rm --no-deps recorder python -m scripts.migrate_recorder_concurrency --apply --merge
 ```
+
+### 录制压缩
+
+录制器始终以原画质 `-c copy` 保存 TS，保证源不稳定时也能完整录下来；`encoder` 服务在 ASR/摘要完成后把文件转成 720p MP4（H.264 CRF 26），校验时长通过才替换并删除原 TS。可在管理台「通用设置 → 录制压缩」或环境变量中调整：
+
+```dotenv
+RECORDING_ENCODE_ENABLED=true
+RECORDING_ENCODE_HEIGHT=720      # 0 表示保持原分辨率
+RECORDING_ENCODE_CRF=26
+RECORDING_ENCODE_PRESET=veryfast
+RECORDING_ENCODE_KEEP_ORIGINAL=false
+RECORDING_ENCODE_CONCURRENCY=1
+```
+
+首次启动会把历史已完成、且尚未标记 `encode_status` 的录像排队转码（`RECORDING_ENCODE_BACKLOG=true`），按现有 93 GB 估算可降到 15–20 GB。转码失败不会阻塞 ASR/摘要，原 TS 会保留。
 
 ## 10. 备份与清理
 

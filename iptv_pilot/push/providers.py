@@ -24,12 +24,29 @@ class PushProvider(ABC):
 class EmailProvider(PushProvider):
     name = "email"
 
+    def __init__(self, config: dict | None = None) -> None:
+        self.config = config
+
+    def _settings(self) -> dict:
+        if self.config is not None:
+            return self.config
+        return {
+            "host": os.getenv("SMTP_HOST", ""),
+            "port": int(os.getenv("SMTP_PORT", "465")),
+            "username": os.getenv("SMTP_USERNAME", ""),
+            "password": os.getenv("SMTP_PASSWORD", ""),
+            "sender": os.getenv("SMTP_FROM") or os.getenv("SMTP_USERNAME", ""),
+            "recipient": os.getenv("SMTP_TO", ""),
+            "use_ssl": os.getenv("SMTP_USE_SSL", "true").lower() in {"1", "true", "yes"},
+        }
+
     def _send(self, subject: str, body: str) -> bool:
-        host = os.getenv("SMTP_HOST", "")
-        username = os.getenv("SMTP_USERNAME", "")
-        password = os.getenv("SMTP_PASSWORD", "")
-        sender = os.getenv("SMTP_FROM") or username
-        recipient = os.getenv("SMTP_TO", "")
+        config = self._settings()
+        host = config.get("host", "")
+        username = config.get("username", "")
+        password = config.get("password", "")
+        sender = config.get("sender") or username
+        recipient = config.get("recipient", "")
         if not all([host, sender, recipient]):
             raise RuntimeError("SMTP_HOST, SMTP_FROM/SMTP_USERNAME and SMTP_TO are required")
         message = EmailMessage()
@@ -37,8 +54,8 @@ class EmailProvider(PushProvider):
         message["From"] = sender
         message["To"] = recipient
         message.set_content(body)
-        port = int(os.getenv("SMTP_PORT", "465"))
-        if os.getenv("SMTP_USE_SSL", "true").lower() in {"1", "true", "yes"}:
+        port = int(config.get("port") or 465)
+        if config.get("use_ssl", True):
             with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
                 if username:
                     smtp.login(username, password)
@@ -200,16 +217,22 @@ def configured_channels() -> list[str]:
     return list(dict.fromkeys(channels or ["none"]))
 
 
-def create_providers() -> list[PushProvider]:
+def create_providers(channels: list[str] | None = None, config: dict | None = None) -> list[PushProvider]:
+    """Build providers for the configured channels.
+
+    ``config`` carries the MongoDB-backed settings (see ``push.settings``); when
+    omitted the provider falls back to environment variables.
+    """
     providers: list[PushProvider] = []
-    for channel in configured_channels():
+    email_config = (config or {}).get("email")
+    for channel in channels if channels is not None else configured_channels():
         if channel in {"none", "coze_query"}:
             continue
         if channel == "coze":
             providers.append(CozeProvider())
             continue
         if channel == "email":
-            providers.append(EmailProvider())
+            providers.append(EmailProvider(email_config))
             continue
         raise RuntimeError(f"unsupported PUSH_PROVIDER channel={channel}")
     return providers
