@@ -9,9 +9,9 @@
 - With ``--purge-parts`` removes stale ``.part.ts`` fragments left by a crash.
 
 Usage:
-    python -m scripts.migrate_recorder_concurrency --dry-run
-    python -m scripts.migrate_recorder_concurrency --apply
-    python -m scripts.migrate_recorder_concurrency --apply --merge --purge-parts
+    python -m scripts.migrations.migrate_recorder_concurrency --dry-run
+    python -m scripts.migrations.migrate_recorder_concurrency --apply
+    python -m scripts.migrations.migrate_recorder_concurrency --apply --merge --purge-parts
 """
 
 from __future__ import annotations

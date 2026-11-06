@@ -33,7 +33,7 @@ scheduler ──► recorder ──► ASR ──► LLM ──► push
 - `iptv_pilot.llm`：将转写内容转换为经过校验的结构化摘要。
 - `iptv_pilot.push`：发送通知并记录投递事件；配置优先读取数据库设置，环境变量作为默认值。
 - `iptv_pilot.live_normalizer`：可选的 Intel VAAPI HLS 规范化服务。
-- `scripts/`：配置、诊断、备份、清理和冒烟测试工具。
+- `scripts/`：按用途分组（`db/` 初始化与备份、`migrations/` 数据迁移、`channels/` 频道与线路、`setup/` 环境配置、`diagnostics/` 运行时检查、`smoke/` 冒烟测试）。
 
 ## 数据流
 
