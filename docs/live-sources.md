@@ -41,8 +41,8 @@ SOURCE_PRIMARY_PATTERNS=\./rtp/.*:4022/
 迁移已有部署时执行：
 
 ```bash
-python3 scripts/migrate_sources.py --dry-run
-python3 scripts/migrate_sources.py --apply
+python3 -m scripts.migrations.migrate_sources --dry-run
+python3 -m scripts.migrations.migrate_sources --apply
 ```
 
 迁移会把每个频道当前的 `m3u_url` 锁定为首选，保证升级后播放行为不变。
@@ -91,7 +91,7 @@ https://provider.example.com/my-authorized-subscription.m3u
 准备好任一文件后，在仓库根目录执行；两个参数可以只提供一个，也可以同时提供：
 
 ```bash
-python3 scripts/import_live_sources.py \
+python3 -m scripts.channels.import_live_sources \
   --channels-file /绝对路径/my-channels.txt \
   --subscriptions-file /绝对路径/my-subscriptions.txt
 ```
@@ -101,7 +101,7 @@ python3 scripts/import_live_sources.py \
 如果 `.env` 不在仓库根目录，可显式指定：
 
 ```bash
-python3 scripts/import_live_sources.py --env-file /绝对路径/iptv-pilot.env \
+python3 -m scripts.channels.import_live_sources --env-file /绝对路径/iptv-pilot.env \
   --subscriptions-file /绝对路径/my-subscriptions.txt
 ```
 

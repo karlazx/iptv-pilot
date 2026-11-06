@@ -5,8 +5,8 @@ Idempotent: every legacy candidate becomes one source, and the channel's current
 ``m3u_url`` is locked as its primary so behaviour does not change on upgrade.
 
 Usage:
-    python -m scripts.migrate_sources --dry-run
-    python -m scripts.migrate_sources --apply
+    python -m scripts.migrations.migrate_sources --dry-run
+    python -m scripts.migrations.migrate_sources --apply
 """
 
 from __future__ import annotations

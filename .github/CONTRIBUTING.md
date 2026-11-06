@@ -8,12 +8,14 @@
 - 删除凭据、私人 URL、录像、转写、邮箱和主机信息。
 - 提供最小复现步骤及相关软件版本。
 
+可复现的缺陷或聚焦的功能建议请通过 GitHub Issues 提交；安全问题按[安全政策](SECURITY.md)私下报告，不要创建公开 Issue。
+
 ## 开发环境
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt pytest ruff
+python -m pip install -r requirements/base.txt pytest ruff
 python -m pytest
 ruff check .
 ```

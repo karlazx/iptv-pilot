@@ -144,7 +144,7 @@ docker compose --profile hardware-accel up -d --build
 
 默认部署面向可信局域网，不强制设置 `WEB_API_TOKEN`。请勿在公网路由器上转发 5190 或 5181 端口。
 
-确需远程访问时，优先使用 VPN；也可部署 HTTPS 反向代理并配置 `WEB_API_TOKEN`。启用令牌前，请阅读[安全政策](../SECURITY.md)中关于媒体播放路径的限制。
+确需远程访问时，优先使用 VPN；也可部署 HTTPS 反向代理并配置 `WEB_API_TOKEN`。启用令牌前，请阅读[安全政策](../.github/SECURITY.md)中关于媒体播放路径的限制。
 
 MongoDB 和 MongoDB Search 端口不得发布到宿主机或公网。
 
@@ -168,8 +168,8 @@ RECORDING_MIN_WINDOW_SECONDS=60  # 剩余窗口不足时不再重试
 升级后执行一次索引迁移（可先 dry-run）：
 
 ```bash
-docker compose run --rm --no-deps recorder python -m scripts.migrate_recorder_concurrency --dry-run
-docker compose run --rm --no-deps recorder python -m scripts.migrate_recorder_concurrency --apply --merge
+docker compose run --rm --no-deps recorder python -m scripts.migrations.migrate_recorder_concurrency --dry-run
+docker compose run --rm --no-deps recorder python -m scripts.migrations.migrate_recorder_concurrency --apply --merge
 ```
 
 ### 录制压缩

@@ -73,7 +73,7 @@ services:
       IPTV_DB_PASSWORD: ${IPTV_DB_PASSWORD:-change-me-iptv}
       MONGOT_PASSWORD: ${MONGOT_PASSWORD:-change-me-mongot}
     volumes:
-      - ./scripts/init_mongo.js:/scripts/init_mongo.js:ro
+      - ./scripts/db/init_mongo.js:/scripts/init_mongo.js:ro
     entrypoint: ["mongosh", "--host", "mongodb:27017", "--file", "/scripts/init_mongo.js"]
     networks: [iptv]
 
@@ -116,7 +116,7 @@ services:
       MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
     volumes:
-      - ./scripts/init_search.js:/scripts/init_search.js:ro
+      - ./scripts/db/init_search.js:/scripts/init_search.js:ro
     entrypoint: ["mongosh", "--nodb", "--file", "/scripts/init_search.js"]
     networks: [iptv]
 
@@ -142,7 +142,7 @@ services:
   channel-sync:
     <<: *worker
     command:
-      ["python", "/app/scripts/seed_channels.py", "${M3U_PATH:-/data/m3u/result.m3u}", "--watch"]
+      ["python", "-m", "scripts.channels.seed_channels", "${M3U_PATH:-/data/m3u/result.m3u}", "--watch"]
     environment:
       <<: *app-environment
       CHANNEL_SYNC_INTERVAL_SECONDS: ${CHANNEL_SYNC_INTERVAL_SECONDS:-300}
@@ -381,7 +381,7 @@ services:
       MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
     volumes:
-      - ./scripts/backup.sh:/scripts/backup.sh:ro
+      - ./scripts/db/backup.sh:/scripts/backup.sh:ro
       - ${BACKUP_PATH:-/nas/iptv/backup}:/data/backup
     entrypoint: ["sh", "/scripts/backup.sh"]
     depends_on:
@@ -393,7 +393,7 @@ services:
     <<: *worker
     profiles: ["maintenance"]
     restart: "no"
-    command: ["python", "/app/scripts/cleanup_recordings.py"]
+    command: ["python", "-m", "scripts.db.cleanup_recordings"]
     environment:
       <<: *app-environment
       RECORDING_RETENTION_DAYS: ${RECORDING_RETENTION_DAYS:-30}
