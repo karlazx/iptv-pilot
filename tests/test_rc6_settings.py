@@ -193,3 +193,24 @@ def test_reclaim_orphans_requeues_and_removes_temporary(tmp_path, monkeypatch):
     assert not temp.exists()
     assert updates[0][0] == {"_id": "rec-1", "encode_status": "encoding"}
     assert updates[0][1]["$set"]["encode_status"] == "pending"
+
+
+def test_encode_duration_tolerance_defaults_and_clamps(monkeypatch):
+    from iptv_pilot.recorder.encoder import duration_tolerance
+
+    monkeypatch.delenv("RECORDING_ENCODE_MIN_DURATION_RATIO", raising=False)
+    assert duration_tolerance() == 0.95
+    monkeypatch.setenv("RECORDING_ENCODE_MIN_DURATION_RATIO", "0.8")
+    assert duration_tolerance() == 0.8
+    monkeypatch.setenv("RECORDING_ENCODE_MIN_DURATION_RATIO", "0.1")
+    assert duration_tolerance() == 0.5
+    monkeypatch.setenv("RECORDING_ENCODE_MIN_DURATION_RATIO", "2")
+    assert duration_tolerance() == 1.0
+    monkeypatch.setenv("RECORDING_ENCODE_MIN_DURATION_RATIO", "garbage")
+    assert duration_tolerance() == 0.95
+
+
+def test_ninety_seven_percent_is_accepted_as_a_complete_encode():
+    # The 490s-vs-503s case that the 0.98 threshold wrongly rejected.
+    expected, actual = 503.0, 490.0
+    assert actual >= expected * 0.95
