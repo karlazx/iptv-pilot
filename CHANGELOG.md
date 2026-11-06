@@ -4,11 +4,16 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 
 ## 尚未发布
 
+## 0.1.0-rc.7 - 2026-11-06
+
 - 仓库整理：根目录只保留构建入口、README、LICENSE、CHANGELOG 和配置样例；社区文档移入 `.github/`，路线图与第三方声明移入 `docs/`。
 - `requirements-*.txt` 合并为 `requirements/` 目录（`base.txt` / `ai.txt` / `embedding.txt`）。
 - `scripts/` 按用途分组为 `db/`、`migrations/`、`channels/`、`setup/`、`diagnostics/`、`smoke/`，Compose 与文档同步更新。
 - 删除未被任何构建或 CI 使用的 `uv.lock`，以及已被管理台取代的 `configure_push_from_stdin.py`、`diagnose_coze_api.py`。
 - 合并 `SUPPORT.md` 到 `.github/CONTRIBUTING.md`。
+- 所有常驻服务补上 `mem_limit`；修复 `stream-quality` 在目录整理后指向旧模块路径、升级后反复重启的问题。
+- 转码时长校验阈值从 0.98 放宽到 0.95，并可通过 `RECORDING_ENCODE_MIN_DURATION_RATIO` 配置。
+- 部署文档新增「主机内存与 earlyoom」一节，记录 OOM 杀掉 `containerd` 后的现象与恢复步骤。
 
 ## 0.1.0-rc.6 - 2026-11-06
 
