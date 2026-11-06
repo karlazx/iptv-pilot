@@ -158,3 +158,38 @@ def test_encode_command_never_upscales_low_resolution_channels(monkeypatch):
     monkeypatch.setenv("FFMPEG_BIN", "ffmpeg")
     command = encode_command(Path("/r/sd.ts"), Path("/r/sd.mp4"), {"height": 720, "crf": 26})
     assert "scale=-2:min(720\\,ih)" in command
+
+
+def test_reclaim_orphans_requeues_and_removes_temporary(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from iptv_pilot.recorder import encoder
+
+    temp = tmp_path / "a.encoding.mp4"
+    temp.write_bytes(b"partial")
+    stale = datetime.now(UTC) - timedelta(minutes=10)
+    updates = []
+
+    class Recordings:
+        def find(self, _query):
+            return [
+                {
+                    "_id": "rec-1",
+                    "file_path": str(tmp_path / "a.ts"),
+                    "encode_status": "encoding",
+                    "encode_worker": "dead:1",
+                    "encode_heartbeat_at": stale,
+                }
+            ]
+
+        def update_one(self, query, update):
+            updates.append((query, update))
+
+    class Database:
+        recordings = Recordings()
+
+    monkeypatch.setenv("RECORDING_ENCODE_HEARTBEAT_SECONDS", "30")
+    assert encoder.reclaim_orphans(Database()) == 1
+    assert not temp.exists()
+    assert updates[0][0] == {"_id": "rec-1", "encode_status": "encoding"}
+    assert updates[0][1]["$set"]["encode_status"] == "pending"
