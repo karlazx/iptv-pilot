@@ -121,6 +121,7 @@ services:
     networks: [iptv]
 
   iptv-api:
+    mem_limit: 1g
     image: ${IPTV_API_IMAGE:-guovern/iptv-api:2.0.8}
     restart: unless-stopped
     environment:
@@ -140,6 +141,7 @@ services:
     networks: [iptv]
 
   channel-sync:
+    mem_limit: 512m
     <<: *worker
     command:
       ["python", "-m", "scripts.channels.seed_channels", "${M3U_PATH:-/data/m3u/result.m3u}", "--watch"]
@@ -150,8 +152,9 @@ services:
       - ${M3U_DATA_PATH:-/nas/iptv/m3u}:/data/m3u:ro
 
   stream-quality:
+    mem_limit: 1g
     <<: *worker
-    command: ["python", "-m", "scripts.refresh_stream_quality", "--watch"]
+    command: ["python", "-m", "scripts.channels.refresh_stream_quality", "--watch"]
     environment:
       <<: *app-environment
       STREAM_QUALITY_INTERVAL_SECONDS: ${STREAM_QUALITY_INTERVAL_SECONDS:-3600}
@@ -212,6 +215,7 @@ services:
       start_period: 30s
 
   epg-engine:
+    mem_limit: 1g
     <<: *worker
     command: ["python", "-m", "iptv_pilot.epg_engine.main"]
     environment:
@@ -223,6 +227,7 @@ services:
       - ${M3U_DATA_PATH:-/nas/iptv/m3u}:/data/m3u:ro
 
   scheduler:
+    mem_limit: 512m
     <<: *worker
     command: ["python", "-m", "iptv_pilot.scheduler.main"]
     environment:
@@ -296,6 +301,7 @@ services:
     mem_limit: 3g
 
   llm:
+    mem_limit: 1g
     <<: *worker
     command: ["python", "-m", "iptv_pilot.llm.main"]
     environment:
@@ -315,6 +321,7 @@ services:
       LLM_STALE_SECONDS: ${LLM_STALE_SECONDS:-300}
 
   push:
+    mem_limit: 512m
     <<: *worker
     command: ["python", "-m", "iptv_pilot.push.main"]
     environment:
@@ -338,6 +345,7 @@ services:
 
   web:
     <<: *worker
+    mem_limit: 1g
     command: ["python", "-m", "iptv_pilot.web.main"]
     environment:
       <<: *app-environment

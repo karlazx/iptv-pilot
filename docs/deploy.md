@@ -230,3 +230,21 @@ docker compose ps
 - 鉴权只有一个可选 Bearer Token，不是多用户身份系统。
 - 录像和部分规范化直播路径尚未全部使用短期签名 URL。
 - AI 功能可能占用较多内存、磁盘和构建时间。
+
+## 12. 主机内存与 earlyoom
+
+录制、转码和 ASR 都可能在短时间内占用较多内存。若宿主启用了 `earlyoom`，内存耗尽时它可能杀掉 `containerd` 本身，导致所有容器的进程消失、`docker ps` 却仍显示 `Up`——此时网页会直接打不开，`docker compose up -d` 还会因为 `mongo-init` 无法连接数据库而失败。
+
+排查与恢复：
+
+```bash
+journalctl -u containerd --since "-1h" | grep -E "killed|Started"
+journalctl --since "-1h" | grep -E "escalating to SIGKILL|sending SIGKILL"
+docker compose up -d --force-recreate
+```
+
+Compose 已为所有常驻服务设置 `mem_limit`，但这只是单容器上限，不限制主机整体。建议：
+
+- 把 `earlyoom` 的内存阈值从默认 10%/5% 调高，或把 `containerd`、`dockerd` 加入 `--avoid` 正则，避免容器运行时被优先杀掉。
+- 与其它内存占用大的服务（媒体转码、相册索引等）错开运行时间。
+- 用 `docker stats` 观察 `encoder` / `asr` 是否频繁接近上限。
