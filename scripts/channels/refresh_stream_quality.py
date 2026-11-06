@@ -20,6 +20,10 @@ from scripts.channels.diagnose_live_quality import HEADERS, benchmark
 def safe_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code}"
+    # Format guardrails explain why a source was skipped; keep that text so the
+    # management UI shows "not a playlist" instead of a bare exception name.
+    if isinstance(exc, ValueError):
+        return str(exc)[:200] or type(exc).__name__
     return type(exc).__name__
 
 
