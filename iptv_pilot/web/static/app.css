@@ -112,6 +112,16 @@ a { color: inherit; }
 .inline-checks { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 6px 0; }
 .inline-checks label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #3c485b; }
 .inline-checks input { width: 16px; height: 16px; accent-color: var(--primary); }
+.source-input-list { display: grid; gap: 8px; }
+.source-input-row { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr) auto auto; gap: 8px; align-items: center; }
+.source-input-row .input { min-width: 0; }
+.inline-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #3c485b; white-space: nowrap; }
+.inline-check input { width: 15px; height: 15px; accent-color: var(--primary); }
+.source-group-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.source-group-head h3 { margin: 0; font-size: 15px; }
+@media (max-width: 720px) {
+  .source-input-row { grid-template-columns: 1fr 1fr; }
+}
 .form-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .data-table td small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
 .data-table td small.danger { color: #b42318; }
@@ -123,6 +133,9 @@ a { color: inherit; }
 
 .split-layout { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 16px; }
 .system-layout { grid-template-columns: minmax(0,1fr) minmax(300px,.55fr); }
+.settings-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(300px,380px); gap: 16px; align-items: start; }
+.push-event-table { max-height: 320px; overflow: auto; }
+.push-event-table thead th { position: sticky; top: 0; background: var(--surface, #fff); z-index: 1; }
 .channel-list { max-height: 66vh; overflow: auto; padding: 8px; }
 .channel-group-label { padding: 11px 10px 6px; color: var(--muted); font-size: 10px; font-weight: 850; letter-spacing: .12em; }
 .channel-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px; border: 0; border-radius: 11px; background: transparent; text-align: left; color: var(--ink); cursor: pointer; }
@@ -221,6 +234,7 @@ a { color: inherit; }
   .mobile-nav a.active { background: var(--primary-soft); color: var(--primary-dark); }
   .split-layout { grid-template-columns: 1fr; }
   .system-layout { grid-template-columns: 1fr; }
+  .settings-layout { grid-template-columns: 1fr; }
   .channel-list { max-height: 240px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px; }
   .channel-group-label { grid-column: 1 / -1; }
 }

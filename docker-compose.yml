@@ -253,6 +253,22 @@ services:
       - ${M3U_DATA_PATH:-/nas/iptv/m3u}:/data/m3u:ro
     mem_limit: 2g
 
+  encoder:
+    <<: *ai-worker
+    command: ["python", "-m", "iptv_pilot.recorder.encoder"]
+    environment:
+      <<: *app-environment
+      RECORDING_ENCODE_CONCURRENCY: ${RECORDING_ENCODE_CONCURRENCY:-1}
+      RECORDING_ENCODE_POLL_SECONDS: ${RECORDING_ENCODE_POLL_SECONDS:-15}
+      RECORDING_ENCODE_LEASE_SECONDS: ${RECORDING_ENCODE_LEASE_SECONDS:-3600}
+      RECORDING_ENCODE_MAX_RETRIES: ${RECORDING_ENCODE_MAX_RETRIES:-2}
+      RECORDING_ENCODE_BACKLOG: ${RECORDING_ENCODE_BACKLOG:-true}
+      FFMPEG_BIN: ${FFMPEG_BIN:-auto}
+    volumes:
+      - ${RECORDINGS_PATH:-/nas/iptv/recordings}:/data/recordings
+      - ${M3U_DATA_PATH:-/nas/iptv/m3u}:/data/m3u:ro
+    mem_limit: 2g
+
   asr:
     <<: *ai-worker
     command: ["python", "-m", "iptv_pilot.asr.main"]
@@ -322,18 +338,6 @@ services:
 
   web:
     <<: *worker
-    image: ${IPTV_PILOT_WEB_IMAGE:-iptv-pilot-web}:${IPTV_PILOT_WEB_TAG:-local}
-    pull_policy: ${IPTV_PILOT_WEB_PULL_POLICY:-never}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        INSTALL_AI_DEPS: 0
-        INSTALL_FFMPEG: 1
-        INSTALL_SYSTEM_FFMPEG: 0
-        INSTALL_EMBEDDING_DEPS: 0
-        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.org/simple}
-        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://deb.debian.org}
     command: ["python", "-m", "iptv_pilot.web.main"]
     environment:
       <<: *app-environment
