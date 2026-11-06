@@ -104,6 +104,12 @@ def encode_command(source: Path, output: Path, settings: dict) -> list[str]:
         "aac",
         "-b:a",
         "128k",
+        # IPTV transport streams often interleave badly damaged packets; ffmpeg
+        # aborts with "Too many packets buffered for output stream" unless the
+        # muxing queue is allowed to grow. 64 packets is ffmpeg's own default
+        # recommendation for remuxing variable streams.
+        "-max_muxing_queue_size",
+        "4096",
         "-movflags",
         "+faststart",
         "-f",

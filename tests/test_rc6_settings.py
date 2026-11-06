@@ -133,6 +133,7 @@ def test_encode_command_caps_height_and_uses_aac(monkeypatch):
         {"height": 720, "crf": 26, "preset": "veryfast"},
     )
     assert "scale=-2:min(720\\,ih)" in command
+    assert command[command.index("-max_muxing_queue_size") + 1] == "4096"
     assert command[command.index("-c:v") + 1] == "libx264"
     assert command[command.index("-c:a") + 1] == "aac"
     assert command[command.index("-crf") + 1] == "26"
