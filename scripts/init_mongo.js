@@ -44,6 +44,11 @@ appDb.recordings.createIndex({status: 1, scheduled_start: 1}, {name: "recording_
 appDb.recordings.createIndex({status: 1, heartbeat_at: 1}, {name: "recording_heartbeat"});
 appDb.recordings.createIndex({claim_id: 1}, {name: "recording_claim", sparse: true});
 appDb.recordings.createIndex({channel_id: 1, start_time: 1}, {name: "recording_channel_start"});
+appDb.recordings.createIndex(
+  {encode_status: 1, next_encode_attempt_at: 1},
+  {name: "recording_encode_queue"}
+);
+appDb.recordings.createIndex({encode_claim_id: 1}, {name: "recording_encode_claim", sparse: true});
 appDb.recordings.createIndex({subscription_id: 1, start_time: -1}, {name: "subscription_history"});
 appDb.recordings.createIndex({subscription_id: 1, start_time: 1}, {name: "recording_subscription_start"});
 appDb.transcripts.createIndex({recording_id: 1}, {unique: true, name: "transcript_recording_unique"});

@@ -17,7 +17,8 @@ IPTVPilot 是一个 Docker Compose 应用，由 Web 进程、多个轮询 Worker
                     └── 管理 API           │
                                            │
 scheduler ──► recorder ──► ASR ──► LLM ──► push
-                    │
+                    │           │
+                    │           └──► encoder（转 720p MP4）
                     └── 录像文件
 ```
 
@@ -26,10 +27,11 @@ scheduler ──► recorder ──► ASR ──► LLM ──► push
 - `iptv_pilot.web`：FastAPI、静态管理台、直播代理、录像播放和搜索。
 - `iptv_pilot.epg_engine`：XMLTV 导入及频道元数据同步。
 - `iptv_pilot.scheduler`：将匹配的订阅和节目单转换为录制任务。
-- `iptv_pilot.recorder`：使用 FFmpeg 录制，失败时回退到隔离的 PyAV 进程。
+- `iptv_pilot.recorder`：使用 FFmpeg 录制，失败时回退到隔离的 PyAV 进程；支持多路并发和 claim fencing。
+- `iptv_pilot.recorder.encoder`：在 ASR/摘要完成后把录像转成较小分辨率的 MP4，并删除原 TS（可配置）。
 - `iptv_pilot.asr`：转写已完成的录像，并可选生成向量。
 - `iptv_pilot.llm`：将转写内容转换为经过校验的结构化摘要。
-- `iptv_pilot.push`：发送通知并记录投递事件。
+- `iptv_pilot.push`：发送通知并记录投递事件；配置优先读取数据库设置，环境变量作为默认值。
 - `iptv_pilot.live_normalizer`：可选的 Intel VAAPI HLS 规范化服务。
 - `scripts/`：配置、诊断、备份、清理和冒烟测试工具。
 

@@ -474,7 +474,11 @@ async function renderRecordings() {
       const saved = Boolean(bookmarkFor("recording", row._id));
       const playable = Boolean(row.file_path) && !["queued","recording","failed"].includes(row.status);
       const incomplete = row.partial ? `<span class="badge danger" title="本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒">不完整</span> ` : "";
-      return `<tr><td><strong>${esc(row.program_title)}</strong><small>${esc(row.channel_id)}${row.manual ? " · 手工" : ""}${row.epg_time_suspect ? " · EPG时间存疑" : ""}</small></td><td>${esc(formatDateTime(row.start_time))}</td><td>${incomplete}${badge(row.status)}</td><td>${esc(formatBytes(row.size_bytes))}</td><td><div class="table-actions"><button class="button small ghost" data-watch-channel="${esc(row.channel_id)}">直播</button><button class="button small secondary" data-recording-detail="${esc(row._id)}">详情</button>${playable ? `<button class="button small secondary" data-play="${esc(row._id)}" data-title="${esc(row.program_title)}">播放</button>` : ""}<button class="button small ghost" data-bookmark-recording="${esc(row._id)}">${saved ? "♥" : "♡"}</button></div></td></tr>`;
+      const encodeMark = row.encode_status === "done"
+        ? `<span class="badge success" title="${esc(formatBytes(row.original_size_bytes))} → ${esc(formatBytes(row.encoded_size_bytes))}">已压缩</span> `
+        : row.encode_status === "failed" ? '<span class="badge danger" title="转码失败，仍保留原始 TS">压缩失败</span> '
+        : row.encode_status === "encoding" ? '<span class="badge">转码中</span> ' : "";
+      return `<tr><td><strong>${esc(row.program_title)}</strong><small>${esc(row.channel_id)}${row.manual ? " · 手工" : ""}${row.epg_time_suspect ? " · EPG时间存疑" : ""}</small></td><td>${esc(formatDateTime(row.start_time))}</td><td>${incomplete}${encodeMark}${badge(row.status)}</td><td>${esc(formatBytes(row.size_bytes))}</td><td><div class="table-actions"><button class="button small ghost" data-watch-channel="${esc(row.channel_id)}">直播</button><button class="button small secondary" data-recording-detail="${esc(row._id)}">详情</button>${playable ? `<button class="button small secondary" data-play="${esc(row._id)}" data-title="${esc(row.program_title)}">播放</button>` : ""}<button class="button small ghost" data-bookmark-recording="${esc(row._id)}">${saved ? "♥" : "♡"}</button></div></td></tr>`;
     }).join("") : `<tr><td colspan="5">${emptyState("暂无记录", "当前筛选条件下没有录制。", true)}</td></tr>`;
   };
   const scheduleRefresh = () => {
@@ -554,7 +558,7 @@ async function openRecordingDetail(recordingId) {
     $("#modal-body").innerHTML = `<div class="detail-stack">
       ${row.partial ? `<div class="notice warning">本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒。</div>` : ""}
       ${row.epg_time_suspect ? `<div class="notice warning">EPG 时间可能不准，建议加大录制缓冲。</div>` : ""}
-      <dl class="definition-grid"><div><dt>频道</dt><dd>${esc(row.channel_id)}</dd></div><div><dt>状态</dt><dd>${badge(row.status)}</dd></div><div><dt>开始时间</dt><dd>${esc(formatDateTime(row.start_time))}</dd></div><div><dt>时长 / 大小</dt><dd>${esc(row.duration_sec || "—")} 秒 · ${esc(formatBytes(row.size_bytes))}</dd></div></dl>
+      <dl class="definition-grid"><div><dt>频道</dt><dd>${esc(row.channel_id)}</dd></div><div><dt>状态</dt><dd>${badge(row.status)}</dd></div><div><dt>开始时间</dt><dd>${esc(formatDateTime(row.start_time))}</dd></div><div><dt>时长 / 大小</dt><dd>${esc(row.duration_sec || "—")} 秒 · ${esc(formatBytes(row.size_bytes))}</dd></div>${row.encode_status === "done" ? `<div><dt>压缩</dt><dd><span class="badge success">已压缩</span> ${esc(formatBytes(row.original_size_bytes))} → ${esc(formatBytes(row.encoded_size_bytes))}${row.encode_settings?.height ? ` · ${esc(row.encode_settings.height)}p` : ""}</dd></div>` : row.encode_status === "pending" || row.encode_status === "encoding" ? `<div><dt>压缩</dt><dd><span class="badge">${row.encode_status === "encoding" ? "转码中" : "等待转码"}</span></dd></div>` : row.encode_status === "failed" ? `<div><dt>压缩</dt><dd><span class="badge danger">转码失败</span>${row.encode_error ? `<small class="danger">${esc(shorten(row.encode_error, 80))}</small>` : ""}</dd></div>` : ""}</dl>
       <div class="button-row">${row.file_path ? `<button class="button" data-detail-play type="button">▶ 播放</button><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原文件</a>` : ""}</div>
       ${summarySections(detail.summary, detail.transcript)}
       <section class="detail-section"><h3>推送事件</h3>${detail.push_events?.length ? detail.push_events.map(item => `<p>${esc(item.provider)} · ${esc(item.status)} · ${esc(formatDateTime(item.updated_at))}</p>`).join("") : "<p>暂无推送事件</p>"}</section>
@@ -935,22 +939,63 @@ async function renderChannelsAdmin() {
 }
 
 function openChannelCreateForm() {
+  const rowHtml = (index, value = {}) => `
+    <div class="source-input-row" data-source-row>
+      <input class="input" name="source_url" required placeholder="http://... 或 https://..." value="${esc(value.url || "")}">
+      <input class="input" name="source_name" maxlength="100" placeholder="线路名称（可选，如：官方组播）" value="${esc(value.name || "")}">
+      <label class="inline-check"><input type="radio" name="primary_index" value="${index}" ${index === 0 ? "checked" : ""}> 首选</label>
+      <button class="button small ghost" type="button" data-remove-source ${index === 0 ? "hidden" : ""}>移除</button>
+    </div>`;
   openModal("添加频道", `<form id="channel-create-form" class="form-grid">
     <label class="field wide"><span>频道 ID</span><input class="input" name="channel_id" required maxlength="100" placeholder="自定义 ID，避免与内置频道冲突（如 MY-TV-1）"></label>
     <label class="field wide"><span>频道名称</span><input class="input" name="name" required maxlength="100" placeholder="例如：我的频道"></label>
-    <label class="field wide"><span>直播源 URL</span><input class="input" name="m3u_url" required placeholder="http://... 或 https://..."></label>
+    <div class="field wide"><span>直播线路</span>
+      <div id="source-inputs" class="source-input-list">${rowHtml(0)}</div>
+      <button class="button small secondary" type="button" id="add-source-row">＋ 添加备用线路</button>
+      <p class="form-hint">第一条选中的线路会锁定为首选源；其他线路作为备用，首选不可用时自动回退。内置频道同步不会修改这里的地址。</p>
+    </div>
     <label class="field"><span>分类</span><select class="select" name="category">${["央视频道","卫视频道","国际频道","地方与其他"].map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label>
     <label class="field"><span>状态</span><select class="select" name="enabled"><option value="true" selected>启用</option><option value="false">禁用</option></select></label>
     <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">添加</button></div>
   </form>`);
+  const container = $("#source-inputs");
+  const renumber = () => {
+    $$("[data-source-row]", container).forEach((row, index) => {
+      row.querySelector("[name=primary_index]").value = String(index);
+      row.querySelector("[data-remove-source]").hidden = index === 0;
+    });
+  };
+  $("#add-source-row").addEventListener("click", () => {
+    if ($$("[data-source-row]", container).length >= 20) return toast("最多添加 20 条线路", "error");
+    container.insertAdjacentHTML("beforeend", rowHtml($$("[data-source-row]", container).length));
+    renumber();
+  });
+  container.addEventListener("click", event => {
+    const remove = event.target.closest("[data-remove-source]");
+    if (!remove) return;
+    remove.closest("[data-source-row]").remove();
+    renumber();
+  });
   $("#channel-create-form").addEventListener("submit", async event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const sources = [];
+    $$("[data-source-row]", container).forEach(row => {
+      const url = row.querySelector("[name=source_url]").value.trim();
+      if (!url) return;
+      sources.push({ url, name: row.querySelector("[name=source_name]").value.trim() });
+    });
+    if (!sources.length) return toast("请至少填写一条直播源 URL", "error");
+    const primaryIndex = Number(data.get("primary_index") || 0);
+    if (primaryIndex > 0) {
+      const [primary] = sources.splice(primaryIndex, 1);
+      sources.unshift(primary);
+    }
     try {
       await api("/api/channels", { method: "POST", body: {
         channel_id: data.get("channel_id").trim(),
         name: data.get("name").trim(),
-        m3u_url: data.get("m3u_url").trim(),
+        sources,
         category: data.get("category"),
         enabled: data.get("enabled") === "true",
       }});
@@ -990,7 +1035,13 @@ async function openChannelDetail(channelId) {
     const detail = await api(`/api/channels/${encodeURIComponent(channelId)}/detail`);
     const row = detail.channel;
     $("#modal-title").textContent = `${row.name} · ${channelId}`;
-    const streams = detail.streams?.candidates || [];
+    const streams = detail.streams?.sources || [];
+    const renderSources = () => streams.map((s, i) => `<tr>
+        <td>${s.preferred ? '<span class="badge success">首选</span>' : ""}${s.locked && !s.preferred ? '<span class="badge info">已锁定</span>' : ""}${s.current && !s.preferred ? '<span class="badge warning">当前</span>' : ""}${!s.enabled ? '<span class="badge">已禁用</span>' : ""}<br><small>${esc(s.label || "")}</small></td>
+        <td><span title="${esc(s.url)}">${esc((() => { try { return new URL(s.url).host; } catch { return s.url; } })())}</span>${s.quality?.valid === false ? `<small class="danger">${esc(shorten(s.quality?.error || "不可用", 40))}</small>` : ""}</td>
+        <td><span class="badge">${esc(SOURCE_KIND_LABELS[s.kind] || "线路")}</span></td>
+        <td><div class="table-actions">${!s.preferred && s.origin !== "seed" ? `<button class="button small secondary" data-detail-preferred="${esc(s.source_id)}">设为首选</button>` : ""}${s.origin !== "seed" ? `<button class="button small danger" data-detail-delete="${esc(s.source_id)}">删除</button>` : ""}</div></td>
+      </tr>`).join("");
     $("#modal-body").innerHTML = `<div class="detail-stack">
       <dl class="definition-grid">
         <div><dt>频道</dt><dd>${esc(row.name)}</dd></div>
@@ -998,9 +1049,41 @@ async function openChannelDetail(channelId) {
         <div><dt>EPG 匹配</dt><dd>${detail.epg?.matched ? `<span class="badge success">已匹配 · ${detail.epg.program_count} 条节目</span>` : '<span class="badge">未匹配</span>'}</dd></div>
         <div><dt>线路数</dt><dd>${streams.length} 条</dd></div>
       </dl>
-      <section class="detail-section"><h3>直播线路</h3>${streams.length ? `<table class="data-table"><thead><tr><th>#</th><th>线路域名</th><th>状态</th></tr></thead><tbody>${streams.map((s, i) => `<tr><td>${i}</td><td>${esc(s.host)}</td><td>${s.current ? '<span class="badge success">当前使用</span>' : '<span class="badge">候选</span>'}${streamQualityLabel(s.quality)}</td></tr>`).join("")}</tbody></table>` : "<p>暂无线路</p>"}</section>
+      <section class="detail-section"><h3>直播线路</h3>
+        <div class="button-row" style="margin-bottom:8px"><button class="button small secondary" type="button" data-detail-add-source>＋ 新增线路</button></div>
+        ${streams.length ? `<table class="data-table"><thead><tr><th>线路</th><th>域名</th><th>类型</th><th></th></tr></thead><tbody>${renderSources()}</tbody></table>` : "<p>暂无线路</p>"}
+      </section>
       <section class="detail-section"><h3>近 10 条录制</h3>${detail.recent_recordings?.length ? detail.recent_recordings.map(r => `<p class="meta-row"><span class="badge ${r.status === "completed" || r.status === "summarized" ? "success" : ""}">${esc(r.status)}</span><span>${esc(r.program_title || "—")}</span><span>${esc(formatDateTime(r.start_time))}</span></p>`).join("") : "<p>暂无录制</p>"}</section>
     </div>`;
+    $("#modal-body").addEventListener("click", async event => {
+      const preferred = event.target.closest("[data-detail-preferred]");
+      const del = event.target.closest("[data-detail-delete]");
+      const add = event.target.closest("[data-detail-add-source]");
+      if (preferred) {
+        try {
+          await api(`/api/sources/${encodeURIComponent(preferred.dataset.detailPreferred)}/preferred`, { method: "POST" });
+          toast("已设为首选并锁定"); await openChannelDetail(channelId);
+        } catch (error) { toast(error.message, "error"); }
+        return;
+      }
+      if (del) {
+        const source = streams.find(item => item.source_id === del.dataset.detailDelete);
+        if (!confirm(`确定删除线路「${source?.label || source?.url}」？`)) return;
+        try {
+          await api(`/api/sources/${encodeURIComponent(source.source_id)}`, { method: "DELETE" });
+          toast("线路已删除"); await openChannelDetail(channelId);
+        } catch (error) { toast(error.message, "error"); }
+        return;
+      }
+      if (add) {
+        const url = prompt("新的直播源 URL（http/https）：");
+        if (!url) return;
+        try {
+          await api("/api/sources", { method: "POST", body: { name: `${row.name} 线路`, url: url.trim(), channel_id: channelId } });
+          toast("线路已添加"); await openChannelDetail(channelId);
+        } catch (error) { toast(error.message, "error"); }
+      }
+    });
   } catch (error) { $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
 }
 
@@ -1015,6 +1098,7 @@ const SOURCE_KIND_LABELS = {
 async function renderSources() {
   const [data, channels] = await Promise.all([api("/api/sources"), loadChannels()]);
   const summary = data.m3u_summary || {};
+  const groups = data.groups || [];
   const grouped = new Map();
   for (const row of data.sources || []) {
     if (!row.channel_id) continue;
@@ -1045,19 +1129,35 @@ async function renderSources() {
     }).join("")}</tbody></table></div></section>` : ""}`;
   const renderGroups = () => {
     const query = ($("#source-filter")?.value || "").trim().toLowerCase();
-    const groups = [...grouped.entries()].filter(([channelId, rows]) => {
+    const matches = (channelId, rows) => {
       if (!query) return true;
       const name = (rows[0]?.channel_name || channelId || "").toLowerCase();
-      return name.includes(query) || String(channelId).toLowerCase().includes(query);
-    });
-    $("#source-count").textContent =
-      `${groups.reduce((total, [, rows]) => total + rows.length, 0)} 条线路 · ${groups.length} 个频道`;
-    $("#source-groups").innerHTML = groups.length ? groups.map(([channelId, rows]) => {
-      const title = rows[0]?.channel_name || channelId;
-      return `<section class="panel" style="margin-bottom:14px">
-        <div class="meta-row" style="margin-bottom:10px"><strong>${esc(title)}</strong><span class="badge">${esc(channelId)}</span><span class="badge ${rows.some(r => r.current && !r.preferred) ? "warning" : "success"}">${rows.some(r => r.current && !r.preferred) ? "已回退到备用" : "使用首选"}</span><span>${rows.length} 条线路</span></div>
-        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>线路</th><th>地址</th><th>类型</th><th>状态</th><th>质量</th><th></th></tr></thead><tbody>
-        ${rows.map(row => {
+      const label = (rows[0]?.group?.label || "").toLowerCase();
+      return name.includes(query) || String(channelId).toLowerCase().includes(query) || label.includes(query);
+    };
+    const byGroup = new Map();
+    for (const [channelId, rows] of grouped.entries()) {
+      if (!matches(channelId, rows)) continue;
+      const key = rows[0]?.group?.key || "custom";
+      if (!byGroup.has(key)) byGroup.set(key, { label: rows[0]?.group?.label || "其他来源", channels: [] });
+      byGroup.get(key).channels.push([channelId, rows]);
+    }
+    const channelCount = [...byGroup.values()].reduce((total, group) => total + group.channels.length, 0);
+    const lineCount = [...byGroup.values()].reduce(
+      (total, group) => total + group.channels.reduce((sum, [, rows]) => sum + rows.length, 0), 0);
+    $("#source-count").textContent = `${lineCount} 条线路 · ${channelCount} 个频道 · ${byGroup.size} 个来源`;
+    $("#source-groups").innerHTML = byGroup.size ? [...byGroup.entries()].map(([key, group]) => {
+      const known = groups.find(item => item.key === key);
+      return `<section class="panel" style="margin-bottom:16px">
+        <div class="source-group-head">
+          <h3>${esc(group.label)}</h3>
+          <span class="badge">${esc(key)}</span>
+          <span class="badge">${group.channels.length} 个频道</span>
+          <span class="badge">${group.channels.reduce((sum, [, rows]) => sum + rows.length, 0)} 条线路</span>
+          ${known?.origin ? `<span class="badge">${esc(SOURCE_ORIGIN_LABELS[known.origin] || known.origin)}</span>` : ""}
+        </div>
+        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>频道</th><th>线路</th><th>地址</th><th>类型</th><th>状态</th><th>质量</th><th></th></tr></thead><tbody>
+        ${group.channels.map(([channelId, rows]) => rows.map((row, index) => {
           const host = (() => { try { return new URL(row.url).host; } catch { return row.url; } })();
           const marks = [];
           if (row.preferred) marks.push('<span class="badge success">首选</span>');
@@ -1067,6 +1167,7 @@ async function renderSources() {
           if (row.origin === "seed") marks.push('<span class="badge">内置</span>');
           if (row.origin === "import") marks.push('<span class="badge warning">导入</span>');
           return `<tr>
+            <td>${index === 0 ? `<strong>${esc(row.channel_name || channelId)}</strong><small>${esc(channelId)}</small>` : ""}</td>
             <td>${marks.join(" ")}<br><small>${esc(row.label || "")}</small></td>
             <td><span title="${esc(row.url)}">${esc(host)}</span>${row.last_error ? `<small class="danger">${esc(shorten(row.last_error, 60))}</small>` : ""}</td>
             <td><span class="badge">${esc(SOURCE_KIND_LABELS[row.kind] || "线路")}</span></td>
@@ -1079,7 +1180,7 @@ async function renderSources() {
               ${row.origin !== "seed" ? `<button class="button small secondary" data-source-edit="${esc(row.source_id)}">编辑</button><button class="button small danger" data-source-delete="${esc(row.source_id)}">删除</button>` : ""}
             </div></td>
           </tr>`;
-        }).join("")}
+        }).join("")).join("")}
         </tbody></table></div></section>`;
     }).join("") : emptyState("没有匹配的线路", "调整筛选或新增备用源。", true);
   };
@@ -1089,6 +1190,13 @@ async function renderSources() {
   $("#source-import").addEventListener("click", () => openImportForm());
   bindSourceDelegation(data.sources || [], channels);
 }
+
+const SOURCE_ORIGIN_LABELS = {
+  seed: "IPTV-API 同步",
+  custom: "用户自定义",
+  import: "M3U 导入",
+  migration: "历史迁移",
+};
 
 function bindSourceDelegation(rows, channels) {
   const view = $("#view");
@@ -1245,18 +1353,59 @@ async function testSourceUrl(url, channelId) {
 }
 
 async function renderSystem() {
-  const [status, events, health, buffer] = await Promise.all([api("/api/system/status"), api("/api/push/events?limit=100"), api("/health"), api("/api/settings/buffer")]);
+  const [status, events, health, buffer, push, encoding] = await Promise.all([
+    api("/api/system/status"),
+    api("/api/push/events?limit=100"),
+    api("/health"),
+    api("/api/settings/buffer"),
+    api("/api/settings/push").catch(() => null),
+    api("/api/settings/recording").catch(() => null),
+  ]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
   const profileOptions = Object.values(buffer.profiles || {}).map(row => `<option value="${esc(row.key)}" ${row.key === buffer.profile ? "selected" : ""}>${esc(row.label)}（缓冲 ${row.buffer_duration}s · 同步 ${row.live_sync} 段）</option>`).join("");
+  const pushEmail = push?.email || {};
+  const pushProviderOptions = [["none", "关闭"], ["email", "邮箱"]]
+    .map(([value, label]) => `<option value="${value}" ${push?.provider === value ? "selected" : ""}>${label}</option>`).join("");
+  const encodingOptions = [[0, "保持原分辨率"], [1080, "1080p"], [720, "720p（推荐）"], [540, "540p"], [480, "480p"]]
+    .map(([value, label]) => `<option value="${value}" ${Number(encoding?.height ?? 720) === value ? "selected" : ""}>${label}</option>`).join("");
   $("#view").innerHTML = `
-    ${pageIntro("查看业务统计和邮件推送审计。容器与磁盘明细未通过管理 API 暴露，避免把宿主权限交给网页。")}
+    ${pageIntro("配置直播缓冲、邮件推送和录制压缩，并查看推送审计。容器与磁盘明细未通过管理 API 暴露，避免把宿主权限交给网页。")}
     <div class="stats-grid"><article class="stat-card"><small>可播频道</small><strong>${esc(status.channels)}</strong></article><article class="stat-card"><small>EPG 节目</small><strong>${esc(status.epg_programs)}</strong></article><article class="stat-card"><small>启用订阅</small><strong>${esc(status.subscriptions)}</strong></article><article class="stat-card"><small>录制记录</small><strong>${esc(recordingTotal)}</strong></article></div>
-    <div class="split-layout system-layout">
-      <section class="panel"><div class="panel-header"><h2>直播缓冲档位</h2><span class="badge">${esc(buffer.profile)}</span></div><div class="panel-body compact"><label class="field compact"><span>播放缓冲模式</span><select class="select" id="buffer-profile-select">${profileOptions}</select></label><p class="meta-row" style="margin-top:6px">低延迟≈低缓冲更实时、流畅≈大缓冲更稳定；切换后新打开的直播立即生效。</p></div></section>
-      <section class="panel"><div class="panel-header"><h2>推送事件</h2><span class="badge">${events.length} 条</span></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>通道</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${events.map(row => `<tr><td>${esc(row.provider)}</td><td><span class="badge ${row.status === "delivered" ? "success" : row.status === "failed" ? "danger" : ""}">${esc(row.status)}</span></td><td>${esc(formatDateTime(row.updated_at))}</td></tr>`).join("") || '<tr><td colspan="3">暂无事件</td></tr>'}</tbody></table></div></section>
-      <div class="detail-stack"><section class="panel"><div class="panel-header"><h2>直播规范化池</h2><span class="badge">${(status.normalizer_pool?.channels || []).length}/${status.normalizer_pool?.max_concurrency ?? 2} 路</span></div><div class="panel-body">${(status.normalizer_pool?.channels || []).length ? status.normalizer_pool.channels.map(row => `<p class="meta-row"><span class="badge info">手动</span><span>${esc(row.name)}</span><span>${row.healthy === true ? '<span class="badge success">健康</span>' : row.healthy === false ? '<span class="badge danger">异常</span>' : '<span class="badge">未知</span>'}</span><span>${esc(formatDateTime(row.measured_at))}</span></p>`).join("") : '<p class="meta-row">当前无手动指定的规范化频道。</p>'}</div></section>
-      <section class="panel"><div class="panel-header"><h2>服务状态</h2></div><div class="panel-body"><p><span class="badge success">API 正常</span></p><p class="meta-row">检查时间：${esc(formatDateTime(health.time))}</p><p class="meta-row">最新摘要：${esc(formatDateTime(status.latest_summary_at))}</p></div></section>
-      <section class="panel"><div class="panel-header"><h2>API 访问令牌</h2></div><div class="panel-body"><p class="meta-row">仅在 NAS 开启 WEB_API_TOKEN 后填写，保存在本次浏览器会话中。</p><label class="field"><span>Bearer Token</span><input class="input" id="api-token" type="password" autocomplete="off" value="${esc(sessionStorage.getItem("iptv_api_token") || "")}"></label><div class="button-row" style="margin-top:12px"><button class="button small" id="save-token">保存</button><button class="button small secondary" id="clear-token">清除</button></div></div></section></div>
+    <div class="settings-layout">
+      <div class="detail-stack">
+        <section class="panel"><div class="panel-header"><h2>直播缓冲档位</h2><span class="badge">${esc(buffer.profile)}</span></div><div class="panel-body compact"><label class="field compact"><span>播放缓冲模式</span><select class="select" id="buffer-profile-select">${profileOptions}</select></label><p class="meta-row" style="margin-top:6px">低延迟≈低缓冲更实时、流畅≈大缓冲更稳定；切换后新打开的直播立即生效。</p></div></section>
+        <section class="panel"><div class="panel-header"><h2>推送配置</h2><span class="badge">${push?.provider === "email" ? "邮件" : "已关闭"}</span></div><div class="panel-body">
+          <form id="push-form" class="form-grid">
+            <label class="field"><span>推送渠道</span><select class="select" name="provider">${pushProviderOptions}</select></label>
+            <label class="field"><span>收件邮箱</span><input class="input" name="recipient" type="email" value="${esc(pushEmail.recipient || "")}" placeholder="name@example.com"></label>
+            <label class="field"><span>SMTP 主机</span><input class="input" name="host" value="${esc(pushEmail.host || "")}" placeholder="smtp.example.com"></label>
+            <label class="field"><span>端口</span><input class="input" name="port" type="number" min="1" max="65535" value="${esc(pushEmail.port ?? 465)}"></label>
+            <label class="field"><span>账号</span><input class="input" name="username" value="${esc(pushEmail.username || "")}" autocomplete="off"></label>
+            <label class="field"><span>密码 / 授权码</span><input class="input" name="password" type="password" autocomplete="new-password" placeholder="${pushEmail.has_password ? "已保存，留空则不修改" : "未设置"}"></label>
+            <label class="field"><span>发件人</span><input class="input" name="sender" value="${esc(pushEmail.sender || "")}" placeholder="留空则使用账号"></label>
+            <label class="field"><span>加密</span><select class="select" name="use_ssl"><option value="true" ${pushEmail.use_ssl !== false ? "selected" : ""}>SSL / 465</option><option value="false" ${pushEmail.use_ssl === false ? "selected" : ""}>STARTTLS</option></select></label>
+            <div class="button-row wide"><button class="button" type="submit">保存推送配置</button><button class="button secondary" type="button" id="push-test">发送测试邮件</button></div>
+            <p class="form-hint wide">保存后推送服务即时生效，无需重启容器。修改的配置优先于 .env。</p>
+          </form>
+        </div></section>
+        <section class="panel"><div class="panel-header"><h2>录制压缩</h2><span class="badge">${encoding?.enabled ? "已开启" : "已关闭"}</span></div><div class="panel-body">
+          <form id="encoding-form" class="form-grid">
+            <label class="field"><span>转码</span><select class="select" name="enabled"><option value="true" ${encoding?.enabled !== false ? "selected" : ""}>开启（录制后转 MP4）</option><option value="false" ${encoding?.enabled === false ? "selected" : ""}>关闭（保留原始 TS）</option></select></label>
+            <label class="field"><span>分辨率</span><select class="select" name="height">${encodingOptions}</select></label>
+            <label class="field"><span>画质 CRF</span><input class="input" name="crf" type="number" min="18" max="34" value="${esc(encoding?.crf ?? 26)}"><small class="form-hint">数值越小画质越好、体积越大；推荐 26。</small></label>
+            <label class="field"><span>编码速度</span><select class="select" name="preset">${["ultrafast","veryfast","faster","fast","medium","slow"].map(p => `<option value="${p}" ${encoding?.preset === p ? "selected" : ""}>${p}</option>`).join("")}</select></label>
+            <label class="field"><span>原文件</span><select class="select" name="keep_original"><option value="false" ${encoding?.keep_original !== true ? "selected" : ""}>转码后删除 TS</option><option value="true" ${encoding?.keep_original === true ? "selected" : ""}>保留 TS</option></select></label>
+            <div class="button-row wide"><button class="button" type="submit">保存压缩配置</button></div>
+            <p class="form-hint wide">录制仍以原画质保存为 TS，避免源不稳定导致丢流；转码在后台进行，完成后替换为 MP4。压缩在有 ASR 的录像完成摘要后进行。</p>
+          </form>
+        </div></section>
+      </div>
+      <div class="detail-stack">
+        <section class="panel"><div class="panel-header"><h2>推送事件</h2><span class="badge">${events.length} 条</span></div><div class="data-table-wrap push-event-table"><table class="data-table"><thead><tr><th>通道</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${events.map(row => `<tr><td>${esc(row.provider)}</td><td><span class="badge ${row.status === "delivered" ? "success" : row.status === "failed" ? "danger" : ""}">${esc(row.status)}</span></td><td>${esc(formatDateTime(row.updated_at))}</td></tr>`).join("") || '<tr><td colspan="3">暂无事件</td></tr>'}</tbody></table></div></section>
+        <section class="panel"><div class="panel-header"><h2>直播规范化池</h2><span class="badge">${(status.normalizer_pool?.channels || []).length}/${status.normalizer_pool?.max_concurrency ?? 2} 路</span></div><div class="panel-body">${(status.normalizer_pool?.channels || []).length ? status.normalizer_pool.channels.map(row => `<p class="meta-row"><span class="badge info">手动</span><span>${esc(row.name)}</span><span>${row.healthy === true ? '<span class="badge success">健康</span>' : row.healthy === false ? '<span class="badge danger">异常</span>' : '<span class="badge">未知</span>'}</span><span>${esc(formatDateTime(row.measured_at))}</span></p>`).join("") : '<p class="meta-row">当前无手动指定的规范化频道。</p>'}</div></section>
+        <section class="panel"><div class="panel-header"><h2>服务状态</h2></div><div class="panel-body"><p><span class="badge success">API 正常</span></p><p class="meta-row">检查时间：${esc(formatDateTime(health.time))}</p><p class="meta-row">最新摘要：${esc(formatDateTime(status.latest_summary_at))}</p></div></section>
+        <section class="panel"><div class="panel-header"><h2>API 访问令牌</h2></div><div class="panel-body"><p class="meta-row">仅在 NAS 开启 WEB_API_TOKEN 后填写，保存在本次浏览器会话中。</p><label class="field"><span>Bearer Token</span><input class="input" id="api-token" type="password" autocomplete="off" value="${esc(sessionStorage.getItem("iptv_api_token") || "")}"></label><div class="button-row" style="margin-top:12px"><button class="button small" id="save-token">保存</button><button class="button small secondary" id="clear-token">清除</button></div></div></section>
+      </div>
     </div>`;
   $("#buffer-profile-select").addEventListener("change", async event => {
     const profile = event.target.value;
@@ -1265,6 +1414,45 @@ async function renderSystem() {
       appState.bufferProfileCache = null;
       toast("缓冲档位已切换，新打开的直播立即生效");
       renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  });
+  $("#push-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      await api("/api/settings/push", { method: "PATCH", body: {
+        provider: data.get("provider"),
+        email: {
+          recipient: data.get("recipient").trim(),
+          host: data.get("host").trim(),
+          port: Number(data.get("port") || 465),
+          username: data.get("username").trim(),
+          password: data.get("password"),
+          sender: data.get("sender").trim(),
+          use_ssl: data.get("use_ssl") === "true",
+        },
+      }});
+      toast("推送配置已保存，即时生效"); renderRoute();
+    } catch (error) { toast(error.message, "error"); }
+  });
+  $("#push-test").addEventListener("click", async () => {
+    try {
+      const result = await api("/api/settings/push/test", { method: "POST" });
+      toast(`测试邮件已发送至 ${result.recipient}`);
+    } catch (error) { toast(error.message, "error"); }
+  });
+  $("#encoding-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      await api("/api/settings/recording", { method: "PATCH", body: {
+        enabled: data.get("enabled") === "true",
+        height: Number(data.get("height")),
+        crf: Number(data.get("crf")),
+        preset: data.get("preset"),
+        keep_original: data.get("keep_original") === "true",
+      }});
+      toast("压缩配置已保存"); renderRoute();
     } catch (error) { toast(error.message, "error"); }
   });
   $("#save-token").addEventListener("click", () => { sessionStorage.setItem("iptv_api_token", $("#api-token").value.trim()); toast("令牌已保存到当前会话"); });

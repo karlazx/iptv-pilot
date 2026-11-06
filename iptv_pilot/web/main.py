@@ -25,9 +25,12 @@ from pymongo import ReturnDocument
 from iptv_pilot import __version__
 from iptv_pilot.common.db import configure_logging, connect_database
 from iptv_pilot.common.live_paths import channel_cache_directory
+from iptv_pilot.push import settings as push_settings
+from iptv_pilot.push.providers import EmailProvider
+from iptv_pilot.recorder import encoding as recording_encoding
 from iptv_pilot.sources import resolver, store
 from iptv_pilot.sources.importing import apply_import, preview_import
-from iptv_pilot.sources.models import source_public
+from iptv_pilot.sources.models import source_public, url_key
 from iptv_pilot.web.live import (
     LiveProxyError,
     LiveTokenSigner,
@@ -198,18 +201,61 @@ class ChannelBatchUpdate(BaseModel):
     disabled: bool
 
 
+class ChannelSourceInput(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+    name: str = Field(default="", max_length=100)
+
+    @model_validator(mode="after")
+    def validate_url(self):
+        parsed = urlparse(self.url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("直播地址必须是有效的 HTTP(S) URL")
+        return self
+
+
+class ChannelSourcesUpdate(BaseModel):
+    """Replace the user-managed source list of an existing channel."""
+
+    sources: list[ChannelSourceInput] = Field(min_length=1, max_length=20)
+    primary_index: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_index(self):
+        if self.primary_index >= len(self.sources):
+            raise ValueError("首选源索引超出范围")
+        keys = [url_key(row.url) for row in self.sources]
+        if len(keys) != len(set(keys)):
+            raise ValueError("同一频道不能重复添加相同的直播源地址")
+        return self
+
+
 class ChannelCreate(BaseModel):
     channel_id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=100)
-    m3u_url: str = Field(min_length=1, max_length=2000)
+    # ``m3u_url`` is the single-source legacy field; new clients send ``sources``.
+    m3u_url: str | None = Field(default=None, max_length=2000)
+    sources: list[ChannelSourceInput] = Field(default_factory=list, max_length=20)
     category: str = Field(default="地方与其他", max_length=40)
     enabled: bool = True
 
     @model_validator(mode="after")
-    def validate_url(self):
-        parsed = urlparse(self.m3u_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("直播地址必须是有效的 HTTP(S) URL")
+    def validate_sources(self):
+        if not self.sources and self.m3u_url:
+            self.sources = [ChannelSourceInput(url=self.m3u_url)]
+        if not self.sources:
+            raise ValueError("至少要填写一条直播源 URL")
+        if self.m3u_url is None:
+            self.m3u_url = self.sources[0].url
+        else:
+            parsed = urlparse(self.m3u_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("直播地址必须是有效的 HTTP(S) URL")
+        keys: set[str] = set()
+        for row in self.sources:
+            key = url_key(row.url)
+            if key in keys:
+                raise ValueError("同一频道不能重复添加相同的直播源地址")
+            keys.add(key)
         return self
 
 
@@ -272,6 +318,29 @@ class SourceImportRequest(BaseModel):
 
 class BufferProfileUpdate(BaseModel):
     profile: Literal["low", "balanced", "smooth"]
+
+
+class PushEmailConfig(BaseModel):
+    host: str = Field(default="", max_length=200)
+    port: int = Field(default=465, ge=1, le=65535)
+    username: str = Field(default="", max_length=200)
+    password: str = Field(default="", max_length=500)
+    sender: str = Field(default="", max_length=200)
+    recipient: str = Field(default="", max_length=500)
+    use_ssl: bool = True
+
+
+class PushConfigUpdate(BaseModel):
+    provider: Literal["none", "email"] = "none"
+    email: PushEmailConfig = Field(default_factory=PushEmailConfig)
+
+
+class RecordingEncodeUpdate(BaseModel):
+    enabled: bool = True
+    height: Literal[0, 480, 540, 720, 1080] = 720
+    crf: int = Field(default=26, ge=18, le=34)
+    preset: Literal["ultrafast", "veryfast", "faster", "fast", "medium", "slow"] = "veryfast"
+    keep_original: bool = False
 
 
 def serialize(value: Any) -> Any:
@@ -430,17 +499,19 @@ def create_channel(payload: ChannelCreate) -> dict:
             detail="频道 ID 已存在，并会在下次直播源同步时被覆盖",
         )
     document = payload.model_dump()
+    document.pop("sources", None)
     document["source"] = "manual"
     document["created_at"] = datetime.now(UTC)
     document["updated_at"] = document["created_at"]
-    document["stream_candidates"] = [document["m3u_url"]]
+    document["stream_candidates"] = [row.url for row in payload.sources]
     document["source_policy"] = "locked_primary"
     database.channels.insert_one(document)
+    primary = payload.sources[0]
     source = store.create_source(
         database,
         channel_id=payload.channel_id,
-        url=payload.m3u_url,
-        label=payload.name,
+        url=primary.url,
+        label=primary.name or payload.name,
         kind="custom",
         provider="手动添加",
         origin="custom",
@@ -448,10 +519,38 @@ def create_channel(payload: ChannelCreate) -> dict:
         priority=0,
     )
     store.set_preferred(database, payload.channel_id, source["source_id"])
+    for index, row in enumerate(payload.sources[1:], start=1):
+        if store.duplicate_url(database, payload.channel_id, row.url):
+            continue
+        store.create_source(
+            database,
+            channel_id=payload.channel_id,
+            url=row.url,
+            label=row.name or f"{payload.name} 备用 {index}",
+            kind="custom",
+            provider="手动添加",
+            origin="custom",
+            priority=index,
+        )
     row = database.channels.find_one({"channel_id": payload.channel_id})
     display = channel_display(row)
-    display["stream_count"] = 1
+    display["stream_count"] = database.sources.count_documents({"channel_id": payload.channel_id})
     return serialize(display)
+
+
+@app.put("/api/channels/{channel_id}/sources")
+def replace_channel_sources(channel_id: str, payload: ChannelSourcesUpdate) -> dict:
+    """Replace the user-managed source list of a channel from the channel editor."""
+    try:
+        result = store.replace_user_sources(
+            database,
+            channel_id,
+            [row.model_dump() for row in payload.sources],
+            primary_index=payload.primary_index,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return serialize({**result, **channel_stream_options(channel_id)})
 
 
 @app.delete("/api/channels/{channel_id}", status_code=204, response_class=Response)
@@ -516,6 +615,32 @@ def _public_source(row: dict, channel_names: dict[str, str]) -> dict:
     }
 
 
+def _source_group(row: dict) -> dict[str, str]:
+    """Group a source under the "total source" it came from.
+
+    The management page is two-level: a provider (official multicast bridge,
+    IPTV-API sync, third-party M3U, user custom, M3U import) owns many channel
+    sources.  Older rows have an empty ``provider``, so derive a stable label
+    from kind/origin instead of showing an empty group.
+    """
+    provider = (row.get("provider") or "").strip()
+    origin = row.get("origin") or "custom"
+    kind = row.get("kind") or ""
+    if provider:
+        key, label = provider, provider
+    elif origin == "seed":
+        key, label = "iptv-api", "IPTV-API 同步"
+    elif kind == "udpxy":
+        key, label = "bridge", "官方组播桥接"
+    elif origin == "import":
+        key, label = "import", "M3U 导入"
+    elif origin == "migration":
+        key, label = "legacy-m3u", "历史 M3U 源"
+    else:
+        key, label = origin, "用户自定义"
+    return {"key": key, "label": label, "origin": origin}
+
+
 @app.get("/api/sources")
 def sources() -> dict:
     """Channel-grouped source list for the management page."""
@@ -546,12 +671,27 @@ def sources() -> dict:
                     "current": row.get("current", False),
                     "preferred": row.get("preferred", False),
                     "policy": payload["policy"],
+                    "group": _source_group(row),
                 }
             )
     unbound = [
-        {**_public_source(row, channel_names), "current": False, "preferred": False}
+        {**_public_source(row, channel_names), "current": False, "preferred": False, "group": _source_group(row)}
         for row in store.unbound_sources(database)
     ]
+    groups: dict[str, dict] = {}
+    for row in rows:
+        group = row["group"]
+        entry = groups.setdefault(
+            group["key"],
+            {"key": group["key"], "label": group["label"], "origin": group["origin"], "source_count": 0, "channel_ids": set()},
+        )
+        entry["source_count"] += 1
+        entry["channel_ids"].add(row.get("channel_id"))
+    group_rows = [
+        {**entry, "channel_count": len(entry["channel_ids"]), "channel_ids": sorted(entry["channel_ids"])}
+        for entry in groups.values()
+    ]
+    group_rows.sort(key=lambda item: (-item["source_count"], item["label"]))
     latest_sync = database.channels.find_one(sort=[("updated_at", -1)])
     return serialize(
         {
@@ -560,6 +700,7 @@ def sources() -> dict:
                 "last_sync_at": (latest_sync or {}).get("updated_at"),
                 "seed_stream_count": sum(1 for row in rows if row.get("origin") == "seed"),
             },
+            "groups": group_rows,
             "sources": rows + unbound,
             "unbound": unbound,
         }
@@ -1131,6 +1272,7 @@ def recordings(status: str | None = None, limit: int = Query(100, ge=1, le=500))
 def create_manual_recording(payload: ManualRecordingCreate) -> dict:
     ensure_enabled_channel(payload.channel_id)
     now = datetime.now(UTC)
+    encode_setting = recording_encoding.load_settings(database)
     document = {
         "subscription_id": None,
         "channel_id": payload.channel_id,
@@ -1148,6 +1290,9 @@ def create_manual_recording(payload: ManualRecordingCreate) -> dict:
         "auto_bookmark": False,
         "manual": True,
         "created_at": now,
+        "encode_status": "pending" if encode_setting["enabled"] else "disabled",
+        "encode_retry_count": 0,
+        "next_encode_attempt_at": None,
     }
     result = database.recordings.insert_one(document)
     return serialize(database.recordings.find_one({"_id": result.inserted_id}))
@@ -1264,6 +1409,50 @@ def set_buffer_profile(payload: BufferProfileUpdate) -> dict:
         upsert=True,
     )
     return serialize(_live_buffer_profile())
+
+
+@app.get("/api/settings/push")
+def get_push_config() -> dict:
+    return serialize(push_settings.public_config(database))
+
+
+@app.patch("/api/settings/push")
+def set_push_config(payload: PushConfigUpdate) -> dict:
+    try:
+        return serialize(
+            push_settings.save_config(
+                database,
+                payload.provider,
+                payload.email.model_dump(),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/settings/push/test")
+def test_push_config() -> dict:
+    config = push_settings.load_config(database)
+    if config["provider"] != "email":
+        raise HTTPException(status_code=422, detail="当前推送渠道不是邮箱")
+    provider = EmailProvider(config["email"])
+    try:
+        provider.push_text(
+            "IPTVPilot 测试邮件\n\n如果你收到这封邮件，说明推送配置可用。"
+        )
+    except Exception as exc:  # delivery errors are reported to the UI verbatim
+        raise HTTPException(status_code=502, detail=f"发送失败：{exc}") from exc
+    return {"ok": True, "recipient": config["email"].get("recipient", "")}
+
+
+@app.get("/api/settings/recording")
+def get_recording_encoding() -> dict:
+    return serialize(recording_encoding.load_settings(database))
+
+
+@app.patch("/api/settings/recording")
+def set_recording_encoding(payload: RecordingEncodeUpdate) -> dict:
+    return serialize(recording_encoding.save_settings(database, payload.model_dump()))
 
 
 @app.get("/api/system/status")

@@ -272,6 +272,72 @@ def duplicate_url(database, channel_id: str | None, url: str, *, exclude: str | 
     return database.sources.find_one(query)
 
 
+def replace_user_sources(
+    database,
+    channel_id: str,
+    entries: list[dict],
+    *,
+    primary_index: int = 0,
+) -> dict:
+    """Apply an explicit source list for a channel from the channel editor.
+
+    Only user-owned rows (``origin=custom``) are removed; synced/imported rows
+    stay in place and are reused when their URL appears in the new list.  The
+    entry at ``primary_index`` becomes the locked preferred source.
+    """
+    channel = database.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise KeyError("频道不存在")
+    existing = sources_for_channel(database, channel_id)
+    by_key = {row.get("url_key"): row for row in existing if row.get("url_key")}
+    keep_ids: set[str] = set()
+    ordered: list[dict] = []
+    created = 0
+    for index, entry in enumerate(entries):
+        key = url_key(entry["url"])
+        row = by_key.get(key)
+        if row:
+            if row.get("origin") == "custom":
+                database.sources.update_one(
+                    {"source_id": row["source_id"]},
+                    {"$set": {"label": normalize_label(entry.get("name") or row.get("label") or ""), "updated_at": now()}},
+                )
+                row = database.sources.find_one({"source_id": row["source_id"]})
+        else:
+            row = create_source(
+                database,
+                channel_id=channel_id,
+                url=entry["url"],
+                label=normalize_label(entry.get("name") or "") or f"{channel.get('name') or channel_id} 线路 {index + 1}",
+                kind="custom",
+                provider="手动添加",
+                origin="custom",
+                priority=next_priority(database, channel_id),
+            )
+            created += 1
+        keep_ids.add(row["source_id"])
+        ordered.append(row)
+    removed = 0
+    for row in existing:
+        if row.get("origin") != "custom" or row["source_id"] in keep_ids:
+            continue
+        database.sources.delete_one({"source_id": row["source_id"]})
+        removed += 1
+    primary = ordered[min(primary_index, len(ordered) - 1)]
+    set_preferred(database, channel_id, primary["source_id"])
+    # Keep non-preferred rows ordered after the primary in the submitted order.
+    remaining = [row for row in ordered if row["source_id"] != primary["source_id"]]
+    for index, row in enumerate(remaining, start=1):
+        database.sources.update_one({"source_id": row["source_id"]}, {"$set": {"priority": index}})
+    sync_channel_mirror(database, database.channels.find_one({"channel_id": channel_id}))
+    return {
+        "channel_id": channel_id,
+        "preferred_source_id": primary["source_id"],
+        "created": created,
+        "removed": removed,
+    }
+
+
 def normalize_label(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()[:100]
 
