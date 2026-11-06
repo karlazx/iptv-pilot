@@ -119,10 +119,15 @@ def sync_channels(database, rows_by_id: dict[str, list[dict]]) -> dict:
 
     # A channel removed from the M3U keeps working when it still owns a locked
     # or user-provided source; only fully seed-owned channels are disabled.
+    # Legacy rows predate the ``source`` field and must be treated as seed rows,
+    # otherwise a channel that vanished from the M3U stays enabled with no line.
     removable = [
         channel["channel_id"]
         for channel in database.channels.find(
-            {"source": "iptv-api", "channel_id": {"$nin": active_ids}},
+            {
+                "channel_id": {"$nin": active_ids},
+                "$or": [{"source": "iptv-api"}, {"source": {"$exists": False}}],
+            },
             {"channel_id": 1},
         )
         if not database.sources.find_one(

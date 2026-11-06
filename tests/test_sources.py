@@ -137,26 +137,29 @@ class FakeCollection:
     def __init__(self, rows=None):
         self.rows = list(rows or [])
 
-    def find(self, query=None, projection=None):
-        def matches(row):
-            for key, value in (query or {}).items():
-                if key == "$or":
-                    if not any(
-                        all(row.get(k) == v for k, v in clause.items()) for clause in value
-                    ):
-                        return False
-                elif isinstance(value, dict):
-                    if "$ne" in value and row.get(key) == value["$ne"]:
-                        return False
-                    if "$in" in value and row.get(key) not in value["$in"]:
-                        return False
-                    if "$nin" in value and row.get(key) in value["$nin"]:
-                        return False
-                elif row.get(key) != value:
+    @staticmethod
+    def _matches(row, query):
+        for key, value in (query or {}).items():
+            if key == "$or":
+                if not any(
+                    FakeCollection._matches(row, clause) for clause in value
+                ):
                     return False
-            return True
+            elif isinstance(value, dict):
+                if "$ne" in value and row.get(key) == value["$ne"]:
+                    return False
+                if "$exists" in value and (key in row) != bool(value["$exists"]):
+                    return False
+                if "$in" in value and row.get(key) not in value["$in"]:
+                    return False
+                if "$nin" in value and row.get(key) in value["$nin"]:
+                    return False
+            elif row.get(key) != value:
+                return False
+        return True
 
-        return [dict(row) for row in self.rows if matches(row)]
+    def find(self, query=None, projection=None):
+        return [dict(row) for row in self.rows if self._matches(row, query)]
 
     def find_one(self, query=None, projection=None):
         rows = self.find(query, projection)
@@ -167,28 +170,40 @@ class FakeCollection:
 
     def update_one(self, query, update):
         for row in self.rows:
-            if all(row.get(k) == v for k, v in query.items()):
+            if self._matches(row, query):
                 for key, value in update.get("$set", {}).items():
                     row[key] = value
                 break
 
     def update_many(self, query, update):
+        modified = 0
         for row in self.rows:
-            if all(row.get(k) == v for k, v in query.items()):
+            if self._matches(row, query):
+                modified += 1
                 for key, value in update.get("$set", {}).items():
                     row[key] = value
+        return type("Result", (), {"modified_count": modified})()
 
     def insert_one(self, document):
         self.rows.append(dict(document))
 
     def delete_one(self, query):
         for index, row in enumerate(self.rows):
-            if all(row.get(k) == v for k, v in query.items()):
+            if self._matches(row, query):
                 self.rows.pop(index)
                 return
 
     def delete_many(self, query):
-        self.rows = [row for row in self.rows if not all(row.get(k) == v for k, v in query.items())]
+        self.rows = [row for row in self.rows if not self._matches(row, query)]
+
+    def bulk_write(self, operations, ordered=False):
+        for operation in operations:
+            self.update_one(operation._filter, operation._doc)
+
+        class Result:
+            upserted_count = 0
+
+        return Result()
 
 
 class FakeDatabase:
@@ -332,3 +347,27 @@ def test_replace_user_sources_rejects_unknown_channel():
 
     with pytest.raises(KeyError):
         store.replace_user_sources(FakeDatabase(), "missing", [{"url": "http://x", "name": ""}])
+
+
+def test_seed_sync_disables_legacy_channel_removed_from_m3u():
+    from scripts.seed_channels import sync_channels
+
+    legacy = {"channel_id": "GONE", "name": "已下线", "enabled": True}
+    kept = {"channel_id": "KEPT", "name": "保留", "enabled": True}
+    db = FakeDatabase(channels=[legacy, kept])
+    sync_channels(
+        db,
+        {
+            "KEPT": [
+                {
+                    "channel_id": "KEPT",
+                    "name": "保留",
+                    "m3u_url": "http://kept",
+                    "raw_m3u": {},
+                }
+            ]
+        },
+    )
+    by_id = {row["channel_id"]: row for row in db.channels.rows}
+    assert by_id["GONE"]["enabled"] is False
+    assert by_id["KEPT"]["enabled"] is True
