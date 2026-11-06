@@ -3,8 +3,8 @@
 
 Idempotent.  Run once after upgrading:
 
-    python -m scripts.migrate_rc6 --dry-run
-    python -m scripts.migrate_rc6 --apply
+    python -m scripts.migrations.migrate_rc6 --dry-run
+    python -m scripts.migrations.migrate_rc6 --apply
 """
 
 from __future__ import annotations

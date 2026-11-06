@@ -9,7 +9,7 @@ EPG_URLS = "/data/m3u/epg/epg.xml"
 
 
 def main() -> None:
-    env_file = Path(__file__).resolve().parent.parent / ".env"
+    env_file = Path(__file__).resolve().parents[2] / ".env"
     if not env_file.is_file():
         raise SystemExit(f"missing env file: {env_file}")
 

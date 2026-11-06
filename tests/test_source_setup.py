@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.import_live_sources import load_dotenv_value, resolve_compose_path
+from scripts.channels.import_live_sources import load_dotenv_value, resolve_compose_path
 
 
 def test_load_dotenv_value_and_resolve_relative_path(tmp_path):
@@ -33,7 +33,7 @@ def test_configure_iptv_api_without_env_file_is_idempotent(tmp_path):
         "https://provider.example.com/authorized.m3u\n",
         encoding="utf-8",
     )
-    script = Path(__file__).parents[1] / "scripts" / "configure_iptv_api.py"
+    script = Path(__file__).parents[1] / "scripts" / "setup" / "configure_iptv_api.py"
     command = [
         sys.executable,
         str(script),

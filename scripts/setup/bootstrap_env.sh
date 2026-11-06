@@ -7,7 +7,7 @@ if [ "$#" -ne 2 ]; then
 fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_dir=$(dirname -- "$script_dir")
+project_dir=$(dirname -- "$(dirname -- "$script_dir")")
 env_file="$project_dir/.env"
 nvme_root=${1%/}
 recording_root=${2%/}

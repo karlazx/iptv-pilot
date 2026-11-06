@@ -24,11 +24,11 @@ RUN if [ "$INSTALL_SYSTEM_FFMPEG" = "1" ]; then \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
-COPY requirements.txt requirements-ai.txt requirements-embedding.txt ./
-RUN pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements.txt \
+COPY requirements ./requirements
+RUN pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements/base.txt \
     && if [ "$INSTALL_FFMPEG" = "1" ]; then pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir imageio-ffmpeg==0.6.0; fi \
-    && if [ "$INSTALL_AI_DEPS" = "1" ]; then pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements-ai.txt; fi \
-    && if [ "$INSTALL_EMBEDDING_DEPS" = "1" ]; then pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements-embedding.txt; fi
+    && if [ "$INSTALL_AI_DEPS" = "1" ]; then pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements/ai.txt; fi \
+    && if [ "$INSTALL_EMBEDDING_DEPS" = "1" ]; then pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements/embedding.txt; fi
 
 COPY iptv_pilot ./iptv_pilot
 COPY scripts ./scripts

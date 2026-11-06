@@ -54,7 +54,7 @@ def main() -> None:
     if not shutil.which("docker"):
         raise SystemExit("未找到 docker 命令")
 
-    project_dir = Path(__file__).resolve().parents[1]
+    project_dir = Path(__file__).resolve().parents[2]
     env_file = args.env_file.expanduser()
     if not env_file.is_absolute():
         env_file = (project_dir / env_file).resolve()

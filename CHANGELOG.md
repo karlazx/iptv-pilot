@@ -4,6 +4,12 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 
 ## 尚未发布
 
+- 仓库整理：根目录只保留构建入口、README、LICENSE、CHANGELOG 和配置样例；社区文档移入 `.github/`，路线图与第三方声明移入 `docs/`。
+- `requirements-*.txt` 合并为 `requirements/` 目录（`base.txt` / `ai.txt` / `embedding.txt`）。
+- `scripts/` 按用途分组为 `db/`、`migrations/`、`channels/`、`setup/`、`diagnostics/`、`smoke/`，Compose 与文档同步更新。
+- 删除未被任何构建或 CI 使用的 `uv.lock`，以及已被管理台取代的 `configure_push_from_stdin.py`、`diagnose_coze_api.py`。
+- 合并 `SUPPORT.md` 到 `.github/CONTRIBUTING.md`。
+
 ## 0.1.0-rc.6 - 2026-11-06
 
 - 直播源管理改为「总源 → 频道 → 线路」两级结构，按官方组播 / IPTV-API / 第三方 M3U / 自定义 / 导入分组。
@@ -14,7 +20,7 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 - 新增 `encoder` 服务：录制完成后在后台转 720p / H.264 / AAC 的 MP4（CRF 26，可配），校验时长后删除原 TS；转码失败不影响 ASR/摘要。
 - 录制列表与详情显示压缩状态、原始/压缩后体积。
 - 移除独立的 `-web` 镜像变体，Web 服务复用基础镜像（含 imageio-ffmpeg）。
-- 新增 `scripts/migrate_rc6.py` 与录制/推送相关索引。
+- 新增 `scripts/migrations/migrate_rc6.py` 与录制/推送相关索引。
 
 ## 0.1.0-rc.5 - 2026-11-05
 
@@ -23,7 +29,7 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 - 过期窗口不再补录；同频道排队到窗口关闭仍无槽位时标记 `overlap_wait_timeout`。
 - 定时任务按 `(channel_id, start_time)` 去重，多订阅命中同一节目只录一份。
 - `/api/system/status` 暴露运行中/排队录制和 worker 明细；录像页每 10 秒刷新。
-- 新增 `scripts/migrate_recorder_concurrency.py` 索引与重复任务迁移脚本。
+- 新增 `scripts/migrations/migrate_recorder_concurrency.py` 索引与重复任务迁移脚本。
 - `recorder` 容器限制 2 GB 内存。
 
 ## 0.1.0-rc.4 - 2026-11-05
@@ -34,7 +40,7 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 - 录制在认领任务时固定源，整段录像和重试都不会中途换源。
 - 自定义源、备用 M3U 导入（先预览）、按 `tvg-id`/名称/归一化名称匹配频道。
 - 管理台直播源页面按频道分组，支持锁定徽标、回退状态、临时切换、启停和导入预览。
-- 新增 `scripts/migrate_sources.py` 和 `scripts/restore_bridge_sources.py`。
+- 新增 `scripts/migrations/migrate_sources.py` 和 `scripts/channels/restore_bridge_sources.py`。
 - 修复频道线路接口的 ObjectId/datetime 序列化错误。
 
 ## 0.1.0-rc.3 - 2026-11-04

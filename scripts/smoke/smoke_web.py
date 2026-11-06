@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 from bson import ObjectId
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from iptv_pilot.common.db import connect_database  # noqa: E402
