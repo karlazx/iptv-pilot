@@ -131,7 +131,7 @@ def test_encode_command_caps_height_and_uses_aac(monkeypatch):
         Path("/r/a.mp4"),
         {"height": 720, "crf": 26, "preset": "veryfast"},
     )
-    assert "scale=-2:720" in command
+    assert "scale=-2:min(720\\,ih)" in command
     assert command[command.index("-c:v") + 1] == "libx264"
     assert command[command.index("-c:a") + 1] == "aac"
     assert command[command.index("-crf") + 1] == "26"
@@ -147,3 +147,13 @@ def test_encode_command_keeps_native_resolution_when_disabled(monkeypatch):
     command = encode_command(Path("/r/a.ts"), Path("/r/a.mp4"), {"height": 0, "crf": 23})
     assert "scale=-2:0" not in command
     assert "-vf" not in command
+
+
+def test_encode_command_never_upscales_low_resolution_channels(monkeypatch):
+    from pathlib import Path
+
+    from iptv_pilot.recorder.encoder import encode_command
+
+    monkeypatch.setenv("FFMPEG_BIN", "ffmpeg")
+    command = encode_command(Path("/r/sd.ts"), Path("/r/sd.mp4"), {"height": 720, "crf": 26})
+    assert "scale=-2:min(720\\,ih)" in command
