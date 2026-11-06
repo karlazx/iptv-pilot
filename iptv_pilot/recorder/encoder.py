@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -233,6 +234,16 @@ def encode_recording(database, recording: dict, settings: dict) -> None:
     output = output_path_for(source)
     temporary = output.with_suffix(".encoding.mp4")
     temporary.unlink(missing_ok=True)
+    available = shutil.disk_usage(source.parent).free
+    estimated = int(source.stat().st_size * 1.2)
+    if available < estimated:
+        _fail(
+            database,
+            recording,
+            claim_id,
+            f"not enough free space: need ~{estimated} bytes, free {available}",
+        )
+        return
     logger.info(
         "encoding started id=%s worker=%s source=%s height=%s crf=%s",
         recording["_id"],
