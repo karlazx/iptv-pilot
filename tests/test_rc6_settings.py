@@ -297,3 +297,94 @@ def test_playlist_guard_rejects_non_playlist_body():
     client = _FakeClient(_FakeStream(content_type="text/html", body=b"<html>error</html>"))
     with pytest.raises(PlaylistTooLarge, match="not an HLS playlist"):
         read_playlist(client, "http://example.test/a.m3u8")
+
+
+def _xmltv(channels, programmes):
+    """Build a minimal XMLTV document for merge tests."""
+    parts = ['<?xml version="1.0" encoding="UTF-8"?><tv>']
+    for cid in channels:
+        parts.append(f'<channel id="{cid}"><display-name>{cid}</display-name></channel>')
+    for cid, start, title in programmes:
+        parts.append(
+            f'<programme start="{start}" stop="{start}" channel="{cid}">'
+            f"<title>{title}</title></programme>"
+        )
+    parts.append("</tv>")
+    return "".join(parts).encode()
+
+
+def test_epg_sources_merge_with_first_source_winning(monkeypatch):
+    from iptv_pilot.epg_engine import main as epg
+
+    primary = _xmltv(["CCTV-1"], [("CCTV-1", "20261107120000 +0800", "来自第一源")])
+    secondary = _xmltv(
+        ["CCTV-1", "东方卫视"],
+        [
+            ("CCTV-1", "20261107120000 +0800", "重复节目"),
+            ("东方卫视", "20261107130000 +0800", "第二源补充"),
+        ],
+    )
+
+    class FakeRecordings:
+        def __init__(self):
+            self.documents = []
+
+        def bulk_write(self, operations, ordered=False):
+            self.documents.extend(op._doc["$set"] for op in operations)
+            return type("Result", (), {"upserted_count": len(operations)})()
+
+        def update_many(self, *_args, **_kwargs):
+            return type("Result", (), {"modified_count": 0})()
+
+        def count_documents(self, _query):
+            return 1
+
+    class FakeDb:
+        def __init__(self):
+            self.channels = FakeRecordings()
+            self.epg_programs = FakeRecordings()
+
+    monkeypatch.setattr(epg, "fetch_epg_sources", lambda: [("first", primary), ("second", secondary)])
+    database = FakeDb()
+    epg.ingest_once(database)
+
+    titles = {row["title"] for row in database.epg_programs.documents}
+    assert titles == {"来自第一源", "第二源补充"}, titles
+    channel_ids = {row["channel_id"] for row in database.channels.documents}
+    assert channel_ids == {"CCTV-1", "东方卫视"}
+
+
+def test_epg_sources_keep_going_when_one_endpoint_fails(monkeypatch):
+    from iptv_pilot.epg_engine import main as epg
+
+    payload = _xmltv(["CCTV-1"], [("CCTV-1", "20261107120000 +0800", "可用源")])
+
+    def fake_source(url, _timeout):
+        if "broken" in url:
+            raise RuntimeError("connection refused")
+        return payload
+
+    monkeypatch.setenv("EPG_URLS", "http://broken.test/epg.xml,http://good.test/epg.xml")
+    monkeypatch.setattr(epg, "fetch_source", fake_source)
+    sources = epg.fetch_epg_sources()
+    assert [url for url, _ in sources] == ["http://good.test/epg.xml"]
+
+
+def test_epg_upcoming_coverage_counts_only_the_future(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from iptv_pilot.epg_engine import main as epg
+
+    now = datetime.now(UTC)
+
+    class Cursor:
+        def count_documents(self, query):
+            start = query["start_time"]["$gte"]
+            assert start >= now - timedelta(seconds=5)
+            return 7
+
+    class FakeDb:
+        epg_programs = Cursor()
+
+    assert epg.upcoming_coverage(FakeDb()) == 7
+

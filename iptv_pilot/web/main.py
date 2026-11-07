@@ -1474,9 +1474,16 @@ def system_status() -> dict:
         )
     )
     now = datetime.now(UTC)
+    epg_upcoming = database.epg_programs.count_documents(
+        {"start_time": {"$gte": now, "$lte": now + timedelta(hours=24)}}
+    )
+    epg_latest = database.epg_programs.find_one(sort=[("start_time", -1)]) or {}
     return {
         "channels": database.channels.count_documents({"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}),
         "epg_programs": database.epg_programs.count_documents({}),
+        "epg_upcoming_24h": epg_upcoming,
+        "epg_latest_start": serialize(epg_latest.get("start_time")),
+        "epg_status": "ok" if epg_upcoming else "stale",
         "subscriptions": database.subscriptions.count_documents({"enabled": True}),
         "recordings_by_status": {
             row["_id"]: row["count"]

@@ -5,7 +5,7 @@ import io
 import logging
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -62,60 +62,101 @@ def iter_xmltv(payload: bytes):
                 element.clear()
 
 
-def fetch_epg() -> tuple[str, bytes]:
+def fetch_source(url: str, timeout: float) -> bytes:
+    """Fetch one XMLTV source, or raise."""
+    if url.startswith("file://") or url.startswith("/"):
+        path = Path(url[7:] if url.startswith("file://") else url)
+        return decode_payload(path.read_bytes(), url)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        return decode_payload(response.content, url)
+
+
+def fetch_epg_sources() -> list[tuple[str, bytes]]:
+    """Fetch every configured source, skipping the ones that fail.
+
+    Sources are merged later, so a broken or stale endpoint only costs its own
+    channels instead of hiding every other source behind a first-match rule.
+    """
     urls = [value.strip() for value in os.getenv("EPG_URLS", "").split(",") if value.strip()]
     timeout = float(os.getenv("EPG_REQUEST_TIMEOUT", "90"))
     if not urls:
         raise RuntimeError("EPG_URLS is empty")
+    payloads: list[tuple[str, bytes]] = []
     errors: list[str] = []
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        for url in urls:
-            try:
-                if url.startswith("file://") or url.startswith("/"):
-                    path = Path(url[7:] if url.startswith("file://") else url)
-                    return url, decode_payload(path.read_bytes(), url)
-                response = client.get(url)
-                response.raise_for_status()
-                return url, decode_payload(response.content, url)
-            except Exception as exc:
-                errors.append(f"{url}: {exc}")
-                logger.warning("EPG source failed url=%s error=%s", url, exc)
-    raise RuntimeError("all EPG sources failed: " + "; ".join(errors))
+    for url in urls:
+        try:
+            payloads.append((url, fetch_source(url, timeout)))
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+            logger.warning("EPG source failed url=%s error=%s", url, exc)
+    if not payloads:
+        raise RuntimeError("all EPG sources failed: " + "; ".join(errors))
+    return payloads
+
+
+def fetch_epg() -> tuple[str, bytes]:
+    """Return the first usable source; retained for callers and tests."""
+    source, payload = fetch_epg_sources()[0]
+    return source, payload
 
 
 def ingest_once(database) -> None:
-    source, payload = fetch_epg()
+    payloads = fetch_epg_sources()
     channel_ops: list[UpdateOne] = []
     programme_ops: list[UpdateOne] = []
     channels = programmes = 0
-    for kind, document in iter_xmltv(payload):
-        if kind == "channel":
-            channel_ops.append(
-                UpdateOne(
-                    {"channel_id": document["channel_id"]},
-                    {
-                        "$set": document,
-                        "$setOnInsert": {"created_at": datetime.now(UTC), "enabled": False},
-                    },
-                    upsert=True,
+    # Earlier sources win on duplicate (channel, start) pairs, so list them in
+    # priority order and let the first writer own each programme.
+    seen_programmes: set[tuple[str, datetime]] = set()
+    seen_channels: set[str] = set()
+    for source, payload in payloads:
+        source_channels = source_programmes = 0
+        for kind, document in iter_xmltv(payload):
+            if kind == "channel":
+                key = document["channel_id"]
+                if key in seen_channels:
+                    continue
+                seen_channels.add(key)
+                channel_ops.append(
+                    UpdateOne(
+                        {"channel_id": key},
+                        {
+                            "$set": document,
+                            "$setOnInsert": {"created_at": datetime.now(UTC), "enabled": False},
+                        },
+                        upsert=True,
+                    )
                 )
-            )
-            channels += 1
-        else:
-            programme_ops.append(
-                UpdateOne(
-                    {"channel_id": document["channel_id"], "start_time": document["start_time"]},
-                    {"$set": document},
-                    upsert=True,
+                channels += 1
+                source_channels += 1
+            else:
+                key = (document["channel_id"], document["start_time"])
+                if key in seen_programmes:
+                    continue
+                seen_programmes.add(key)
+                programme_ops.append(
+                    UpdateOne(
+                        {"channel_id": document["channel_id"], "start_time": document["start_time"]},
+                        {"$set": document},
+                        upsert=True,
+                    )
                 )
-            )
-            programmes += 1
-        if len(channel_ops) >= 500:
-            database.channels.bulk_write(channel_ops, ordered=False)
-            channel_ops.clear()
-        if len(programme_ops) >= 1000:
-            database.epg_programs.bulk_write(programme_ops, ordered=False)
-            programme_ops.clear()
+                programmes += 1
+                source_programmes += 1
+            if len(channel_ops) >= 500:
+                database.channels.bulk_write(channel_ops, ordered=False)
+                channel_ops.clear()
+            if len(programme_ops) >= 1000:
+                database.epg_programs.bulk_write(programme_ops, ordered=False)
+                programme_ops.clear()
+        logger.info(
+            "EPG source ingested source=%s channels=%s programmes=%s",
+            source,
+            source_channels,
+            source_programmes,
+        )
     if channel_ops:
         database.channels.bulk_write(channel_ops, ordered=False)
     if programme_ops:
@@ -124,12 +165,28 @@ def ingest_once(database) -> None:
         {"epg_source": "xmltv", "m3u_url": {"$exists": False}},
         {"$set": {"enabled": False}},
     )
+    coverage = upcoming_coverage(database)
     logger.info(
-        "EPG ingest complete source=%s channels=%s programmes=%s epg_only_disabled=%s",
-        source,
+        "EPG ingest complete sources=%s channels=%s programmes=%s epg_only_disabled=%s "
+        "upcoming_24h=%s",
+        len(payloads),
         channels,
         programmes,
         disabled.modified_count,
+        coverage,
+    )
+    if coverage == 0:
+        logger.error(
+            "EPG ingest produced no programmes in the next 24 hours; "
+            "every configured source may be stale: %s",
+            ", ".join(source for source, _ in payloads),
+        )
+
+
+def upcoming_coverage(database, hours: int = 24) -> int:
+    now = datetime.now(UTC)
+    return database.epg_programs.count_documents(
+        {"start_time": {"$gte": now, "$lte": now + timedelta(hours=hours)}}
     )
 
 
