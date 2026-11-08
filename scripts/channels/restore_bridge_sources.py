@@ -1,31 +1,45 @@
 #!/usr/bin/env python3
-"""Restore bridge (4023 HLS) sources for channels that lost them.
+"""Restore bridge HLS sources for channels that lost them.
 
 A legacy ``channel-sync`` run overwrote ``m3u_url``/``stream_candidates`` with an
 old ``result.m3u`` for channels whose sources had not yet been migrated into the
 ``sources`` collection.  This script rebuilds the canonical bridge URL from the
-bridge playlist (``4022/rtp/<addr>`` -> ``4023/hls/<addr>/index.m3u8``), adds it
-back as a locked primary source, and keeps the third-party URL as a backup.
+bridge playlist (``/rtp/<addr>`` -> ``/hls/<addr>/index.m3u8``), adds it back as
+a locked primary source, and keeps the third-party URL as a backup.
+
+The bridge address and playlist path are deployment-specific, so nothing is
+hard-coded: pass them on the command line or through the environment.
 
 Usage:
-    python -m scripts.channels.restore_bridge_sources --dry-run
-    python -m scripts.channels.restore_bridge_sources --apply
+    export IPTV_BRIDGE_BASE=http://<bridge-host>:<port>/hls
+    python -m scripts.channels.restore_bridge_sources --m3u /path/to/bridge.m3u --dry-run
+    python -m scripts.channels.restore_bridge_sources --m3u /path/to/bridge.m3u --apply
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from iptv_pilot.common.db import connect_database
 from iptv_pilot.sources.models import make_source, now, url_key
 
-BRIDGE_BASE = "http://192.168.31.251:4023/hls"
-ADDR_PATTERN = re.compile(r"/rtp/(238\.200\.200\.\d+:\d+)")
-BRIDGE_PATTERN = re.compile(r"4023/hls/(238\.200\.200\.\d+:\d+)/index\.m3u8")
+ADDR_PATTERN = re.compile(r"/rtp/(\d{1,3}(?:\.\d{1,3}){3}:\d+)")
 QUALITY_SUFFIX = re.compile(r"(超高清|高清|标清|HD|SD)$", re.IGNORECASE)
+
+
+def bridge_base_from_env() -> str:
+    value = os.getenv("IPTV_BRIDGE_BASE", "").strip()
+    if not value:
+        raise SystemExit(
+            "IPTV_BRIDGE_BASE is required, for example "
+            "http://<bridge-host>:<port>/hls (no trailing slash)"
+        )
+    return value.rstrip("/")
 
 
 def normalize(value: str) -> str:
@@ -63,7 +77,7 @@ def load_bridge_map(path: str) -> dict[str, str]:
     return mapping
 
 
-def plan(database, bridge_map: dict[str, str]) -> dict:
+def plan(database, bridge_map: dict[str, str], bridge_base: str) -> dict:
     damaged: list[dict] = []
     restored: list[dict] = []
     unresolved: list[str] = []
@@ -74,10 +88,13 @@ def plan(database, bridge_map: dict[str, str]) -> dict:
             {"channel_id": 1, "name": 1, "m3u_url": 1, "stream_candidates": 1, "preferred_source_id": 1},
         )
     )
+    # Anything already served by this bridge host counts as "has a bridge source".
+    bridge_host = urlparse(bridge_base).netloc
+
     for channel in channels:
         channel_id = channel.get("channel_id")
         urls = [channel.get("m3u_url") or ""] + list(channel.get("stream_candidates") or [])
-        if any("4023" in url for url in urls if url):
+        if any(bridge_host and bridge_host in url for url in urls if url):
             continue
         addr = (
             bridge_map.get(str(channel_id).upper())
@@ -87,7 +104,7 @@ def plan(database, bridge_map: dict[str, str]) -> dict:
         if not addr:
             unresolved.append(channel_id)
             continue
-        bridge_url = f"{BRIDGE_BASE}/{addr}/index.m3u8"
+        bridge_url = f"{bridge_base}/{addr}/index.m3u8"
         damaged.append({"channel_id": channel_id, "current": channel.get("m3u_url"), "bridge": bridge_url})
         existing = list(database.sources.find({"channel_id": channel_id}))
         have_bridge = any(row.get("url") == bridge_url for row in existing)
@@ -95,7 +112,9 @@ def plan(database, bridge_map: dict[str, str]) -> dict:
             {
                 "channel_id": channel_id,
                 "bridge": bridge_url,
-                "backups": len([url for url in urls if url and "4023" not in url]),
+                "backups": len(
+                    [url for url in urls if url and (not bridge_host or bridge_host not in url)]
+                ),
                 "sources": len(existing),
                 "has_bridge_source": have_bridge,
             }
@@ -103,7 +122,7 @@ def plan(database, bridge_map: dict[str, str]) -> dict:
     return {"damaged": damaged, "restored": restored, "unresolved": unresolved}
 
 
-def apply(database, bridge_map: dict[str, str]) -> dict:
+def apply(database, bridge_map: dict[str, str], bridge_base: str) -> dict:
     result = plan(database, bridge_map)
     for row in result["damaged"]:
         channel_id = row["channel_id"]
@@ -171,17 +190,24 @@ def apply(database, bridge_map: dict[str, str]) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Restore bridge primary sources")
-    parser.add_argument("--m3u", default="/home/17621379180/udpxy/shanghai_unicom_udpxy.m3u")
+    parser.add_argument(
+        "--m3u",
+        default=os.getenv("IPTV_BRIDGE_M3U", ""),
+        help="bridge playlist listing /rtp/<addr> URLs (default: IPTV_BRIDGE_M3U)",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true", help="print the full plan as JSON")
     args = parser.parse_args()
+    if not args.m3u:
+        parser.error("--m3u or IPTV_BRIDGE_M3U is required")
+    bridge_base = bridge_base_from_env()
     bridge_map = load_bridge_map(args.m3u)
     database = connect_database()
     if args.apply and not args.dry_run:
-        print(json.dumps(apply(database, bridge_map), ensure_ascii=False))
+        print(json.dumps(apply(database, bridge_map, bridge_base), ensure_ascii=False))
         return
-    result = plan(database, bridge_map)
+    result = plan(database, bridge_map, bridge_base)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
