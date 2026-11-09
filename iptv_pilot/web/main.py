@@ -1283,6 +1283,7 @@ def create_manual_recording(payload: ManualRecordingCreate) -> dict:
         "end_time": now + timedelta(seconds=payload.duration_sec),
         "scheduled_start": now,
         "scheduled_end": now + timedelta(seconds=payload.duration_sec),
+        "window_seconds": payload.duration_sec,
         "status": "queued",
         "retry_count": 0,
         "asr_enabled": payload.asr_enabled,

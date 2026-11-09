@@ -354,3 +354,97 @@ def test_scheduler_dedupes_same_channel_and_start(monkeypatch):
     operation = database.recordings.operations[0]
     assert operation._filter == {"channel_id": "CCTV-1", "start_time": start}
     assert operation._doc["$addToSet"]["subscription_ids"]["$each"] == ["sub-1", "sub-2"]
+
+
+class _FailureDB:
+    """Minimal stand-in that records the update the recorder would apply."""
+
+    def __init__(self):
+        self.filter = None
+        self.update = None
+
+    class _Recordings:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def update_one(self, filter_, update):
+            self.owner.filter = filter_
+            self.owner.update = update
+
+            class Result:
+                matched_count = 1
+
+            return Result()
+
+    @property
+    def recordings(self):
+        return self._Recordings(self)
+
+
+def _failure_recording(**overrides):
+    base = {
+        "_id": "rec-1",
+        "claim_id": "claim-1",
+        "retry_count": 0,
+        "scheduled_start": datetime.now(UTC) - timedelta(minutes=5),
+        "scheduled_end": datetime.now(UTC) + timedelta(minutes=30),
+        "window_seconds": 2160,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_retry_is_skipped_when_little_window_remains(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_RETRY_MIN_FRACTION", "0.2")
+    monkeypatch.setenv("RECORDING_MIN_WINDOW_SECONDS", "60")
+    database = _FailureDB()
+    # 36-minute window with 4 minutes left: only the post-roll is ahead, so a
+    # retry would capture a few seconds of tail and fail again.
+    recording = _failure_recording(scheduled_end=datetime.now(UTC) + timedelta(minutes=4))
+    handle_failure(database, recording, RuntimeError("recording ended early"))
+    assert database.update["$set"]["status"] == "failed"
+    assert database.update["$set"]["skip_reason"] == "insufficient_window"
+
+
+def test_retry_is_allowed_when_most_of_the_window_remains(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_RETRY_MIN_FRACTION", "0.2")
+    database = _FailureDB()
+    recording = _failure_recording(scheduled_end=datetime.now(UTC) + timedelta(minutes=30))
+    handle_failure(database, recording, RuntimeError("recording ended early"))
+    assert database.update["$set"]["status"] == "queued"
+    assert database.update["$set"]["next_attempt_at"] > datetime.now(UTC)
+
+
+def test_upstream_errors_back_off_longer_than_stream_errors(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_RETRY_DELAY_SECONDS", "30")
+    monkeypatch.setenv("RECORDING_RETRY_UPSTREAM_DELAY_SECONDS", "120")
+
+    stream_db = _FailureDB()
+    handle_failure(stream_db, _failure_recording(), RuntimeError("captured short"))
+    stream_delay = stream_db.update["$set"]["next_attempt_at"] - datetime.now(UTC)
+
+    upstream_db = _FailureDB()
+    handle_failure(upstream_db, _failure_recording(), RuntimeError("HTTP error 502 Bad Gateway"))
+    upstream_delay = upstream_db.update["$set"]["next_attempt_at"] - datetime.now(UTC)
+
+    assert upstream_delay > stream_delay
+    assert upstream_delay >= timedelta(seconds=110)
+
+
+def test_retry_stops_immediately_when_the_window_is_closed(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    database = _FailureDB()
+    recording = _failure_recording(scheduled_end=datetime.now(UTC) - timedelta(minutes=1))
+    handle_failure(database, recording, RuntimeError("boom"))
+    assert database.update["$set"]["skip_reason"] == "window_expired"
