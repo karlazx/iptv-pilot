@@ -82,6 +82,11 @@ def schedule_once(database) -> None:
                     "end_time": programme["end_time"],
                     "scheduled_start": programme["start_time"] - timedelta(seconds=pre_roll),
                     "scheduled_end": programme["end_time"] + timedelta(seconds=post_roll),
+                    # Original window length, used by the recorder to decide
+                    # whether a retry can still capture meaningful content.
+                    "window_seconds": (programme["end_time"] - programme["start_time"]).total_seconds()
+                    + pre_roll
+                    + post_roll,
                     "status": "queued",
                     "retry_count": 0,
                     "created_at": now,

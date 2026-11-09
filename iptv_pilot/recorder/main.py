@@ -67,6 +67,40 @@ def min_window_seconds() -> int:
     return _env_int("RECORDING_MIN_WINDOW_SECONDS", 60, 10)
 
 
+def retry_min_fraction() -> float:
+    """Minimum share of the original window a retry must still cover.
+
+    A retry that starts after most of the programme has aired records only the
+    tail, fails the duration check, and burns another attempt. Require a
+    meaningful share of the content to still be ahead of us.
+    """
+    try:
+        value = float(os.getenv("RECORDING_RETRY_MIN_FRACTION", "0.2"))
+    except ValueError:
+        value = 0.2
+    return min(1.0, max(0.0, value))
+
+
+def retry_delay_seconds(error: str) -> int:
+    """Back off longer when the upstream is rejecting us outright.
+
+    A transport-level failure (5xx, connection refused, DNS) needs time to
+    recover, while a short capture may simply be a single dropped segment.
+    """
+    normalized = (error or "").lower()
+    if any(token in normalized for token in ("502", "503", "504", "bad gateway",
+                                             "connection refused", "server error")):
+        return _env_int("RECORDING_RETRY_UPSTREAM_DELAY_SECONDS", 120, 10)
+    return _env_int("RECORDING_RETRY_DELAY_SECONDS", 30, 5)
+
+
+def remaining_window(recording: dict, now: datetime | None = None) -> float:
+    end = recording.get("scheduled_end") or recording.get("end_time")
+    if not end:
+        return 0.0
+    return (end - (now or datetime.now(UTC))).total_seconds()
+
+
 class RecordingHeartbeat:
     """Refresh ``heartbeat_at`` so long recordings are never reclaimed."""
 
@@ -532,8 +566,17 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
     }
     scheduled_end = recording.get("scheduled_end") or recording.get("end_time") or datetime.now(UTC)
     now = datetime.now(UTC)
-    if retry_count <= maximum and scheduled_end > now + timedelta(seconds=min_window_seconds()):
-        update.update({"status": "queued", "next_attempt_at": now + timedelta(seconds=30)})
+    window_total = recording.get("window_seconds")
+    if window_total is None:
+        start = recording.get("scheduled_start")
+        if start:
+            window_total = (scheduled_end - start).total_seconds()
+    remaining = (scheduled_end - now).total_seconds()
+    needed = max(min_window_seconds(), (window_total or 0) * retry_min_fraction())
+    if retry_count <= maximum and remaining > needed:
+        delay = retry_delay_seconds(str(error))
+        update.update({"status": "queued", "next_attempt_at": now + timedelta(seconds=delay)})
+        update["retry_window_remaining"] = int(remaining)
         result = database.recordings.update_one(
             {"_id": recording["_id"], "claim_id": claim_id},
             {
@@ -543,7 +586,15 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
         )
     else:
         update["status"] = "failed"
-        update["skip_reason"] = "retry_exhausted" if retry_count > maximum else "window_expired"
+        if retry_count > maximum:
+            update["skip_reason"] = "retry_exhausted"
+        elif remaining <= min_window_seconds():
+            update["skip_reason"] = "window_expired"
+        else:
+            # The window is still open but too little of it is left to capture
+            # anything meaningful; recording the tail would only fail again.
+            update["skip_reason"] = "insufficient_window"
+        update["retry_window_remaining"] = int(max(0, remaining))
         result = database.recordings.update_one(
             {"_id": recording["_id"], "claim_id": claim_id},
             {"$set": update},
