@@ -463,6 +463,41 @@ def _resolve_recording_source(database, channel: dict) -> dict:
         raise
 
 
+def same_source_retries() -> int:
+    """How many times to retry the pinned source before trying another one."""
+    return _env_int("RECORDING_SOURCE_RETRIES", 1, 0)
+
+
+def max_source_switches() -> int:
+    """Upper bound on how many different sources one task may try."""
+    return _env_int("RECORDING_MAX_SOURCE_SWITCHES", 2, 0)
+
+
+def _next_recording_source(database, recording: dict) -> dict | None:
+    """Return an untried enabled source for the channel, or None.
+
+    Sources are offered in priority order and each one is tried once; the
+    recorder never falls back to a source it already failed on.
+    """
+    from iptv_pilot.sources import resolver
+    from iptv_pilot.sources.models import ordered_sources
+
+    channel = database.channels.find_one({"channel_id": recording["channel_id"]})
+    if not channel:
+        return None
+    tried = {str(value) for value in (recording.get("tried_source_ids") or [])}
+    if recording.get("source_id"):
+        tried.add(str(recording["source_id"]))
+    current_url = recording.get("source_url")
+    for row in ordered_sources(resolver.sources_for(database, channel)):
+        if str(row.get("source_id")) in tried:
+            continue
+        if row.get("url") and row.get("url") == current_url:
+            continue
+        return row
+    return None
+
+
 def process_recording(database, recording: dict) -> None:
     claim_id = recording.get("claim_id")
     encode_settings = load_encode_settings(database)
@@ -555,6 +590,13 @@ def process_recording(database, recording: dict) -> None:
 
 
 def handle_failure(database, recording: dict, error: Exception) -> None:
+    """Retry the pinned source once, then rotate to an untried source.
+
+    A short capture or a transient upstream error is often specific to one
+    line, so the first retry keeps the same URL. Only after that does the
+    recorder move to the next enabled source for the channel, which avoids
+    stitching together feeds that differ in delay or content.
+    """
     claim_id = recording.get("claim_id")
     retry_count = int(recording.get("retry_count", 0)) + 1
     maximum = int(os.getenv("RECORDING_MAX_RETRIES", "2"))
@@ -573,8 +615,52 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
             window_total = (scheduled_end - start).total_seconds()
     remaining = (scheduled_end - now).total_seconds()
     needed = max(min_window_seconds(), (window_total or 0) * retry_min_fraction())
-    if retry_count <= maximum and remaining > needed:
+    can_retry = retry_count <= maximum and remaining > needed
+
+    switch_to = None
+    exhausted_sources = False
+    if can_retry:
+        attempts_on_source = int(recording.get("source_attempts", 0)) + 1
+        update["source_attempts"] = attempts_on_source
+        tried = list(recording.get("tried_source_ids") or [])
+        if recording.get("source_id") and str(recording["source_id"]) not in tried:
+            tried.append(str(recording["source_id"]))
+        switches = int(recording.get("source_switches", 0))
+        if attempts_on_source > same_source_retries() and switches < max_source_switches():
+            switch_to = _next_recording_source(database, recording)
+            if switch_to is not None:
+                update.update(
+                    {
+                        "source_id": switch_to.get("source_id"),
+                        "source_url": switch_to["url"],
+                        "source_kind": switch_to.get("kind"),
+                        "source_attempts": 0,
+                        "source_switches": switches + 1,
+                        "tried_source_ids": tried,
+                        "source_switched_at": now,
+                        "source_switched_reason": str(error)[:200],
+                    }
+                )
+                logger.warning(
+                    "recording source exhausted id=%s switch=%s/%s to source=%s",
+                    recording["_id"],
+                    switches + 1,
+                    max_source_switches(),
+                    switch_to.get("source_id") or switch_to["url"][:60],
+                )
+                # Give the new source its own same-source retry budget while
+                # keeping retry_count bounded by source_switches.
+                update["retry_count"] = 0
+                retry_count = 0
+            else:
+                update["tried_source_ids"] = tried
+                can_retry = False
+                exhausted_sources = True
+
+    if can_retry:
         delay = retry_delay_seconds(str(error))
+        if switch_to is not None:
+            delay = _env_int("RECORDING_RETRY_SWITCH_DELAY_SECONDS", 15, 1)
         update.update({"status": "queued", "next_attempt_at": now + timedelta(seconds=delay)})
         update["retry_window_remaining"] = int(remaining)
         result = database.recordings.update_one(
@@ -586,7 +672,10 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
         )
     else:
         update["status"] = "failed"
-        if retry_count > maximum:
+        if exhausted_sources:
+            # Every enabled source for the channel has now failed.
+            update["skip_reason"] = "sources_exhausted"
+        elif retry_count > maximum:
             update["skip_reason"] = "retry_exhausted"
         elif remaining <= min_window_seconds():
             update["skip_reason"] = "window_expired"

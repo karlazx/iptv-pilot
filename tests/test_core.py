@@ -385,6 +385,7 @@ def _failure_recording(**overrides):
     base = {
         "_id": "rec-1",
         "claim_id": "claim-1",
+        "channel_id": "CCTV-1",
         "retry_count": 0,
         "scheduled_start": datetime.now(UTC) - timedelta(minutes=5),
         "scheduled_end": datetime.now(UTC) + timedelta(minutes=30),
@@ -448,3 +449,140 @@ def test_retry_stops_immediately_when_the_window_is_closed(monkeypatch):
     recording = _failure_recording(scheduled_end=datetime.now(UTC) - timedelta(minutes=1))
     handle_failure(database, recording, RuntimeError("boom"))
     assert database.update["$set"]["skip_reason"] == "window_expired"
+
+
+class _SwitchDB:
+    """Failure sink plus the channel/source lookup the recorder needs."""
+
+    def __init__(self, sources=None):
+        self.filter = None
+        self.update = None
+        self.rows = sources or []
+        owner = self
+
+        class Channels:
+            def find_one(self, *_args, **_kwargs):
+                return {"channel_id": "CCTV-1", "source_policy": "locked_primary"}
+
+        class Sources:
+            def find(self, *_args, **_kwargs):
+                return list(owner.rows)
+
+        class Recordings:
+            def update_one(self, filter_, update):
+                owner.filter = filter_
+                owner.update = update
+
+                class Result:
+                    matched_count = 1
+
+                return Result()
+
+        self.channels = Channels()
+        self.sources = Sources()
+        self.recordings = Recordings()
+
+
+def _source_row(source_id, url, priority, enabled=True):
+    return {
+        "source_id": source_id,
+        "url": url,
+        "priority": priority,
+        "enabled": enabled,
+        "locked": priority == 0,
+    }
+
+
+def test_retry_keeps_the_same_source_first(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_SOURCE_RETRIES", "1")
+    database = _SwitchDB(
+        sources=[
+            _source_row("s-primary", "http://a", 0),
+            _source_row("s-backup", "http://b", 1),
+        ]
+    )
+    recording = _failure_recording(
+        source_id="s-primary",
+        source_url="http://a",
+        source_attempts=0,
+        tried_source_ids=["s-primary"],
+    )
+    handle_failure(database, recording, RuntimeError("captured short"))
+    # First failure must stay on the pinned URL.
+    assert database.update["$set"]["status"] == "queued"
+    assert "source_url" not in database.update["$set"]
+
+
+def test_second_failure_switches_to_an_untried_source(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_SOURCE_RETRIES", "1")
+    monkeypatch.setenv("RECORDING_MAX_SOURCE_SWITCHES", "2")
+    database = _SwitchDB(
+        sources=[
+            _source_row("s-primary", "http://a", 0),
+            _source_row("s-backup", "http://b", 1),
+        ]
+    )
+    recording = _failure_recording(
+        source_id="s-primary",
+        source_url="http://a",
+        source_attempts=1,
+        tried_source_ids=["s-primary"],
+    )
+    handle_failure(database, recording, RuntimeError("captured short"))
+    update = database.update["$set"]
+    assert update["status"] == "queued"
+    assert update["source_id"] == "s-backup"
+    assert update["source_url"] == "http://b"
+    assert update["source_switches"] == 1
+    assert update["source_attempts"] == 0
+    assert update["retry_count"] == 0
+
+
+def test_switch_is_skipped_when_no_source_is_left(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_SOURCE_RETRIES", "0")
+    monkeypatch.setenv("RECORDING_MAX_SOURCE_SWITCHES", "2")
+    database = _SwitchDB(sources=[_source_row("s-primary", "http://a", 0)])
+    recording = _failure_recording(
+        source_id="s-primary",
+        source_url="http://a",
+        source_attempts=1,
+        tried_source_ids=["s-primary"],
+    )
+    handle_failure(database, recording, RuntimeError("captured short"))
+    assert database.update["$set"]["status"] == "failed"
+    assert database.update["$set"]["skip_reason"] == "sources_exhausted"
+
+
+def test_source_switch_count_is_capped(monkeypatch):
+    from iptv_pilot.recorder.main import handle_failure
+
+    monkeypatch.setenv("RECORDING_MAX_RETRIES", "2")
+    monkeypatch.setenv("RECORDING_SOURCE_RETRIES", "0")
+    monkeypatch.setenv("RECORDING_MAX_SOURCE_SWITCHES", "1")
+    database = _SwitchDB(
+        sources=[
+            _source_row("s-primary", "http://a", 0),
+            _source_row("s-backup", "http://b", 1),
+        ]
+    )
+    recording = _failure_recording(
+        source_id="s-primary",
+        source_url="http://a",
+        source_attempts=0,
+        source_switches=1,
+        tried_source_ids=["s-primary"],
+    )
+    handle_failure(database, recording, RuntimeError("captured short"))
+    # The switch budget is spent, so it retries the current source instead of
+    # rotating to the backup again.
+    assert database.update["$set"]["status"] == "queued"
+    assert "source_url" not in database.update["$set"]
