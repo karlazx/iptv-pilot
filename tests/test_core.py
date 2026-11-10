@@ -582,7 +582,8 @@ def test_source_switch_count_is_capped(monkeypatch):
         tried_source_ids=["s-primary"],
     )
     handle_failure(database, recording, RuntimeError("captured short"))
-    # The switch budget is spent, so it retries the current source instead of
-    # rotating to the backup again.
-    assert database.update["$set"]["status"] == "queued"
+    # Per-source budget is spent and the rotation budget is spent too, so the
+    # task fails instead of looping over the same pair of sources.
+    assert database.update["$set"]["status"] == "failed"
+    assert database.update["$set"]["skip_reason"] == "retry_exhausted"
     assert "source_url" not in database.update["$set"]

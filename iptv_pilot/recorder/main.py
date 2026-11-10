@@ -615,52 +615,61 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
             window_total = (scheduled_end - start).total_seconds()
     remaining = (scheduled_end - now).total_seconds()
     needed = max(min_window_seconds(), (window_total or 0) * retry_min_fraction())
-    can_retry = retry_count <= maximum and remaining > needed
+    window_ok = remaining > needed
+
+    # ``source_attempts`` counts failures on the *current* source; it is what
+    # decides when to rotate. ``retry_count`` is the lifetime counter and only
+    # bounds total work, so it must not gate the rotation decision.
+    attempts_on_source = int(recording.get("source_attempts", 0)) + 1
+    switches = int(recording.get("source_switches", 0))
+    tried = list(recording.get("tried_source_ids") or [])
+    if recording.get("source_id") and str(recording["source_id"]) not in tried:
+        tried.append(str(recording["source_id"]))
 
     switch_to = None
     exhausted_sources = False
-    if can_retry:
-        attempts_on_source = int(recording.get("source_attempts", 0)) + 1
-        update["source_attempts"] = attempts_on_source
-        tried = list(recording.get("tried_source_ids") or [])
-        if recording.get("source_id") and str(recording["source_id"]) not in tried:
-            tried.append(str(recording["source_id"]))
-        switches = int(recording.get("source_switches", 0))
-        if attempts_on_source > same_source_retries() and switches < max_source_switches():
-            switch_to = _next_recording_source(database, recording)
-            if switch_to is not None:
-                update.update(
-                    {
-                        "source_id": switch_to.get("source_id"),
-                        "source_url": switch_to["url"],
-                        "source_kind": switch_to.get("kind"),
-                        "source_attempts": 0,
-                        "source_switches": switches + 1,
-                        "tried_source_ids": tried,
-                        "source_switched_at": now,
-                        "source_switched_reason": str(error)[:200],
-                    }
-                )
-                logger.warning(
-                    "recording source exhausted id=%s switch=%s/%s to source=%s",
-                    recording["_id"],
-                    switches + 1,
-                    max_source_switches(),
-                    switch_to.get("source_id") or switch_to["url"][:60],
-                )
-                # Give the new source its own same-source retry budget while
-                # keeping retry_count bounded by source_switches.
-                update["retry_count"] = 0
-                retry_count = 0
-            else:
-                update["tried_source_ids"] = tried
-                can_retry = False
-                exhausted_sources = True
+    budget_left = attempts_on_source <= same_source_retries()
+    if window_ok and not budget_left and switches < max_source_switches():
+        switch_to = _next_recording_source(database, recording)
+        if switch_to is None:
+            exhausted_sources = True
+        budget_left = switch_to is not None
 
-    if can_retry:
-        delay = retry_delay_seconds(str(error))
+    # A rotation resets the per-source counter, so cap the lifetime total too:
+    # otherwise a channel with several backups could retry every source twice.
+    total_attempts = retry_count + switches
+    if window_ok and budget_left and total_attempts > maximum + max_source_switches():
+        budget_left = False
+        exhausted_sources = False
+
+    if window_ok and budget_left:
         if switch_to is not None:
-            delay = _env_int("RECORDING_RETRY_SWITCH_DELAY_SECONDS", 15, 1)
+            update.update(
+                {
+                    "source_id": switch_to.get("source_id"),
+                    "source_url": switch_to["url"],
+                    "source_kind": switch_to.get("kind"),
+                    "source_attempts": 0,
+                    "source_switches": switches + 1,
+                    "tried_source_ids": tried,
+                    "source_switched_at": now,
+                    "source_switched_reason": str(error)[:200],
+                    "retry_count": 0,
+                }
+            )
+            logger.warning(
+                "recording source exhausted id=%s switch=%s/%s to source=%s",
+                recording["_id"],
+                switches + 1,
+                max_source_switches(),
+                switch_to.get("source_id") or switch_to["url"][:60],
+            )
+        else:
+            update["source_attempts"] = attempts_on_source
+            update["tried_source_ids"] = tried
+
+    if window_ok and budget_left:
+        delay = _env_int("RECORDING_RETRY_SWITCH_DELAY_SECONDS", 15, 1) if switch_to else retry_delay_seconds(str(error))
         update.update({"status": "queued", "next_attempt_at": now + timedelta(seconds=delay)})
         update["retry_window_remaining"] = int(remaining)
         result = database.recordings.update_one(
@@ -675,14 +684,10 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
         if exhausted_sources:
             # Every enabled source for the channel has now failed.
             update["skip_reason"] = "sources_exhausted"
-        elif retry_count > maximum:
-            update["skip_reason"] = "retry_exhausted"
-        elif remaining <= min_window_seconds():
-            update["skip_reason"] = "window_expired"
+        elif not window_ok:
+            update["skip_reason"] = "window_expired" if remaining <= min_window_seconds() else "insufficient_window"
         else:
-            # The window is still open but too little of it is left to capture
-            # anything meaningful; recording the tail would only fail again.
-            update["skip_reason"] = "insufficient_window"
+            update["skip_reason"] = "retry_exhausted"
         update["retry_window_remaining"] = int(max(0, remaining))
         result = database.recordings.update_one(
             {"_id": recording["_id"], "claim_id": claim_id},
