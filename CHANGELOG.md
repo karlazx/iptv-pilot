@@ -4,6 +4,15 @@ IPTVPilot 的重要变化将记录在此文件中。首次发布标签后，项�
 
 ## 尚未发布
 
+## 0.1.0-rc.10 - 2026-11-10
+
+- 录制重试增加窗口检查：剩余时长不足原始窗口的 20% 时不再重试，标记 `insufficient_window`。
+- 任务创建时记录 `window_seconds`，用于判断重试是否还有意义。
+- 重试先复用原源一次；仍失败则按优先级切换到未尝试过的备用源（`tried_source_ids` 去重）。
+- 换源次数受 `RECORDING_MAX_SOURCE_SWITCHES` 限制，全部源失败时标记 `sources_exhausted`。
+- 上游类错误（502/503/504、连接拒绝）退避时间更长。
+- 新增 `retry_window_remaining`、`source_attempts`、`source_switches`、`source_switched_at`、`source_switched_reason` 诊断字段。
+
 ## 0.1.0-rc.9 - 2026-11-07
 
 - EPG 引擎改为**合并所有配置的源**，不再只使用第一个成功的源；单个源失败只影响它自己。
