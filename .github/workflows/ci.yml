@@ -12,6 +12,18 @@ permissions:
 jobs:
   python:
     runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongodb/mongodb-community-server:8.2.0-ubi9
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_MONGODB_URI: mongodb://127.0.0.1:27017
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
