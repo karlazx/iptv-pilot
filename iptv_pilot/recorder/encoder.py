@@ -174,7 +174,10 @@ def claim_job(database):
                 },
                 {
                     "$or": [
-                        {"next_encode_attempt_at": {"$exists": False}},
+                        # Equality to None matches both explicit null and a
+                        # missing field. Newly completed/reclaimed jobs store
+                        # null to mean there is no retry delay.
+                        {"next_encode_attempt_at": None},
                         {"next_encode_attempt_at": {"$lte": now}},
                     ]
                 },
@@ -189,7 +192,7 @@ def claim_job(database):
                 "encode_heartbeat_at": now,
             }
         },
-        sort=[("completed_at", 1)],
+        sort=[("completed_at", -1), ("_id", -1)],
         return_document=ReturnDocument.AFTER,
     )
     return job
