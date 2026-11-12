@@ -17,7 +17,8 @@ def test_service_references_reject_shell_and_option_injection():
             deploy.service_images([value])
 
 
-def test_scoped_upgrade_waits_preserves_rollback_and_only_restarts_target(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pull_policy", ["always", "missing"])
+def test_scoped_upgrade_waits_preserves_rollback_and_only_restarts_target(tmp_path, monkeypatch, pull_policy):
     (tmp_path / "docker-compose.yml").write_text("services: {}")
     (tmp_path / ".env").write_text("PRIVATE_SETTING=local-only")
     calls = []
@@ -50,11 +51,13 @@ def test_scoped_upgrade_waits_preserves_rollback_and_only_restarts_target(tmp_pa
     monkeypatch.setattr(deploy.subprocess, "run", lambda args, **kw: calls.append(args))
     monkeypatch.setattr(deploy.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(sys, "argv", ["deploy", "--project-dir", str(tmp_path),
-                                     "--service", "encoder=registry.example/app:new", "--apply"])
+                                     "--service", "encoder=registry.example/app:new", "--apply",
+                                     "--pull", pull_policy])
     deploy.main()
     ups = [c for c in calls if "up" in c]
     assert len(ups) == 1 and ups[0][-1] == "encoder" and "--no-deps" in ups[0]
-    assert [c for c in calls if "pull" in c] == [["docker", "pull", "registry.example/app:new"]]
+    pulls = [c for c in calls if "pull" in c]
+    assert pulls == ([["docker", "pull", "registry.example/app:new"]] if pull_policy == "always" else [])
     assert len(active_polls) >= 3
     state_file = next((tmp_path / ".deploy-history").glob("*/state.json"))
     state = json.loads(state_file.read_text())

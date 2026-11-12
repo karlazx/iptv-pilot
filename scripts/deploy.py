@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--api", default="http://127.0.0.1:8080")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--apply", action="store_true", help="otherwise print the plan only")
+    parser.add_argument("--pull", choices=["always", "missing", "never"], default="missing")
     parser.add_argument("--rollback", type=Path, help="state.json from a prior deployment")
     args = parser.parse_args()
     root = args.project_dir.resolve()
@@ -89,7 +90,14 @@ def main():
     (backup / "state.json").write_text(json.dumps(state, indent=2))
     if not args.rollback:
         for image in sorted(set(targets.values())):
-            subprocess.run(["docker", "pull", image], check=True)
+            pull = args.pull == "always"
+            if args.pull == "missing":
+                try:
+                    command(["docker", "image", "inspect", image])
+                except subprocess.CalledProcessError:
+                    pull = True
+            if pull:
+                subprocess.run(["docker", "pull", image], check=True)
     token = os.getenv("IPTV_DEPLOY_API_TOKEN", "")
     endpoint = args.api.rstrip("/") + "/api/system/maintenance"
     before = api(endpoint, token)
