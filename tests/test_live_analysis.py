@@ -315,3 +315,17 @@ def test_sidecar_finish_does_not_override_asr_state(database, state):
     observer.thread.is_alive = lambda: False
     observer.finish(True)
     assert database.recordings.find_one({"_id": row["_id"]})["live_state"] == state
+
+
+def test_new_capture_attempt_resets_preview_progress_and_lease(database):
+    from iptv_pilot.recorder.live_audio import LiveAudio
+
+    row = recording(database, claim_id="new", live_epoch="old", live_summary_seconds=600,
+                    live_audio_seconds=700, live_summary_lease=datetime.now(UTC)+timedelta(minutes=10))
+    observer = LiveAudio(database, row, None, None)
+    observer.thread.start = lambda: None
+    observer.start()
+    saved = database.recordings.find_one({"_id": row["_id"]})
+    assert saved["live_epoch"] == "new"
+    assert saved["live_summary_seconds"] == saved["live_audio_seconds"] == 0
+    assert saved["live_summary_lease"] is None

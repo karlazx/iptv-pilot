@@ -91,6 +91,11 @@ class LiveAudio:
             "capture_state": "recording", "summary_state": "waiting", "live_chunk_count": 0,
             "live_transcribed_seconds": 0, "live_notes_last_seq": -1,
             "live_verified_count": 0, "live_verified_seconds": 0,
+            "live_audio_seconds": 0, "live_summary_seconds": 0,
+            "live_summary_lease": None, "live_summary_claim": None,
+            "live_summary_retry_at": None, "live_summary_error": None, "live_error": None,
+            "summary_claim": None, "summary_heartbeat_at": None,
+            "summary_retry_count": 0, "next_summary_attempt_at": None,
             "live_preview": None, "live_preview_updated_at": None,
         }})
         self.thread.start()
