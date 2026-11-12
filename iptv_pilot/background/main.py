@@ -43,7 +43,7 @@ def jobs(database):
 
     return {
         "scheduler": (lambda: schedule_once(database), seconds("SCHEDULER_INTERVAL_SECONDS", "60")),
-        "epg-engine": (lambda: ingest_once(database), seconds("EPG_REFRESH_MINUTES", "30") * 60),
+        "epg-engine": (lambda: ingest_once(database), seconds("EPG_REFRESH_MINUTES", "30", 1) * 60),
         "stream-quality": (lambda: quality(int(os.getenv("STREAM_QUALITY_SAMPLE_COUNT", "2")),
                             float(os.getenv("STREAM_QUALITY_TIMEOUT_SECONDS", "20")),
                             int(os.getenv("STREAM_QUALITY_WORKERS", "3")), database=database),
@@ -79,6 +79,8 @@ def periodic(database, name, job, interval, stop):
 
 def main():
     configure_logging()
+    # Keep signed upstream URLs out of INFO request logs in compact mode.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     if "split" in os.getenv("RUNTIME_PROFILES", "").split(","):
         raise RuntimeError("compact and split profiles must not run together")
     database = connect_database()
