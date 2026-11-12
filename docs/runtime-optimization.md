@@ -53,6 +53,8 @@ python -m scripts.deploy --project-dir . --api http://localhost:8080 \
 添加 `--apply` 才执行。API 令牌通过 `IPTV_DEPLOY_API_TOKEN` 提供，不放在命令参数中。
 脚本默认只拉取本地缺少的指定镜像，设置维护暂停并等待当前任务结束，再用 `up -d --no-deps` 更新目标服务。
 需要检查可变标签的远端更新时使用 `--pull always`；已离线准备并校验的镜像可使用 `--pull never`。
+执行后，`docker-compose.deploy.json` 是已更新服务的镜像清单，脚本将其加入 `COMPOSE_FILE`，后续普通 Compose 操作也会沿用。
+该文件的镜像覆盖优先于 `.env` 中的标签；后续定向更新请继续使用脚本。
 近期有录制任务时拒绝升级 recorder；超时不会强制杀掉任务。
 首次从旧版本升级时，旧 worker 不支持维护暂停，需要人工检查活动任务，完成一次引导升级。
 
