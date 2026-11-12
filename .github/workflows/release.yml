@@ -87,7 +87,9 @@ jobs:
           build-args: ${{ matrix.build_args }}
           # GHA caches are ref-scoped: a new release tag cannot reuse a previous
           # tag's dependency layers. Registry cache references survive tag changes.
-          cache-from: type=registry,ref=ghcr.io/karlazx/iptv-pilot:buildcache-${{ matrix.variant }}
+          cache-from: |
+            type=registry,ref=ghcr.io/karlazx/iptv-pilot:buildcache-${{ matrix.variant }}
+            type=registry,ref=ghcr.io/karlazx/iptv-pilot:buildcache-ai
           cache-to: type=registry,ref=ghcr.io/karlazx/iptv-pilot:buildcache-${{ matrix.variant }},mode=max,image-manifest=true,oci-mediatypes=true
           sbom: true
           provenance: mode=max
