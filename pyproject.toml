@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iptv-pilot"
-version = "0.1.0rc14"
+version = "0.1.0rc15"
 description = "Smart IPTV subscriptions, channel management, and program digests."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = ["av==18.1.0", "faster-whisper==1.1.1", "requests==2.32.5"]
+asr-intel = ["openvino-genai==2026.4.1"]
 embedding = ["sentence-transformers==5.1.0"]
 dev = ["pytest>=8,<9", "ruff>=0.12,<1"]
 

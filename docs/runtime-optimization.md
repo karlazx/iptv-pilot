@@ -7,7 +7,7 @@
    领取时消耗尝试预算，因此 OOM/SIGKILL 也不会无限重做。心跳与 claim 保护长任务和状态写入。
    总任务时间预算在段间检查，不是单段推理的硬中断。
 2. 媒体基础镜像包含 FFmpeg、PyAV 和 NumPy，供 recorder、encoder、web 使用；只有 ASR 使用 Whisper 镜像。
-   发布仍生成三个变体，部署可只选择一个服务。基础依赖、媒体依赖和模型依赖分层安装。
+   部署可只选择一个服务和所需镜像变体。基础依赖、媒体依赖和模型依赖分层安装。
    发布依赖缓存保存在 GHCR 的 buildcache 标签中，避免新 Git 标签无法读取旧 GHA 缓存。
    手动运行 Release 工作流只预热缓存，不发布新运行镜像或 GitHub Release；首次填充后供后续版本复用。
 3. 紧凑模式将调度、EPG、质量检测、源同步、LLM、推送放入一个后台进程的独立线程。
@@ -77,7 +77,8 @@ python -m scripts.deploy --project-dir . --api http://localhost:8080 \
 默认生产后端仍是 faster-whisper CPU/int8；VAAPI 视频编码接口不能直接加速 Whisper 推理。
 Intel 核显可评估 [OpenVINO WhisperPipeline](https://docs.openvino.ai/2026/api/genai_api/_autosummary/openvino_genai.WhisperPipeline.html)。
 模型格式、驱动和运行时均需匹配，识别到 GPU 不代表速度优于 CPU。
-OpenVINO 是隔离实验依赖，不加入默认发布镜像。
+OpenVINO 仅加入可选的 `-asr-intel` 镜像，普通 `-ai` 和媒体镜像不携带它。
+CPU/GPU 选择、故障回退和质量验证见 [ASR 加速说明](asr-acceleration.md)。
 
 使用同一音频比较冷启动、预热后耗时、内存与输出质量，并考虑 FP16/int8 的差异：
 

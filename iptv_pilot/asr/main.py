@@ -13,12 +13,12 @@ from pathlib import Path
 from pymongo import ReturnDocument
 
 from iptv_pilot.asr.audio import audio_windows
+from iptv_pilot.asr.inference import configuration, get_session, runtime_info
 from iptv_pilot.common.db import configure_logging, connect_database, run_forever
 from iptv_pilot.common.embedding import embed_text
 from iptv_pilot.common.runtime import is_draining
 
 logger = logging.getLogger(__name__)
-_whisper_models: dict[tuple, object] = {}
 
 
 class ClaimLost(RuntimeError):
@@ -74,19 +74,7 @@ def owned_update(database, recording: dict, values: dict) -> None:
 
 
 def transcribe_window(audio, model_name: str) -> list[dict]:
-    from faster_whisper import WhisperModel
-
-    key = (model_name, os.getenv("ASR_DEVICE", "cpu"), os.getenv("ASR_COMPUTE_TYPE", "int8"))
-    model = _whisper_models.get(key)
-    if model is None:
-        model = WhisperModel(model_name, device=key[1], compute_type=key[2], num_workers=1,
-                             cpu_threads=max(1, int(os.getenv("ASR_CPU_THREADS", "4"))))
-        _whisper_models[key] = model
-    segments, _ = model.transcribe(audio, vad_filter=True,
-                                   language=os.getenv("ASR_LANGUAGE", "").strip() or None,
-                                   beam_size=1)
-    return [{"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
-            for s in segments]
+    return get_session(model_name).transcribe(audio)
 
 
 def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
@@ -94,16 +82,17 @@ def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
     if backend == "mock":
         text = f"ASR mock transcript for {os.path.basename(recording['file_path'])}"
         return [{"start": 0.0, "end": 1.0, "text": text}], text
-    if backend != "faster_whisper":
+    if backend not in {"auto", "faster_whisper", "openvino"}:
         raise RuntimeError(f"unsupported ASR_BACKEND={backend}")
     path = Path(recording["file_path"])
     stat = path.stat()
     seconds = max(30, min(600, int(os.getenv("ASR_CHUNK_SECONDS", "300"))))
     model = recording.get("asr_model") or os.getenv("ASR_MODEL", "small")
     signature = hashlib.sha256(repr((str(path), stat.st_size, stat.st_mtime_ns, seconds,
-                                    backend, model, os.getenv("ASR_LANGUAGE", ""))).encode()).hexdigest()
+                                    configuration(model))).encode()).hexdigest()
     deadline = time.monotonic() + max(60, int(os.getenv("ASR_JOB_TIMEOUT_SECONDS", "14400")))
     segments = []
+    runtimes = []
     for index, (offset, audio) in enumerate(audio_windows(str(path), seconds)):
         if time.monotonic() > deadline:
             raise TimeoutError("ASR job exceeded its time budget")
@@ -114,12 +103,17 @@ def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
         if saved is None:
             local = transcribe_window(audio, model)
             saved = {"_id": chunk_id, "recording_id": recording["_id"], "signature": signature,
-                     "index": index, "segments": [
+                     "index": index, "runtime": runtime_info(), "segments": [
                          {**s, "start": s["start"] + offset, "end": s["end"] + offset}
                          for s in local], "created_at": datetime.now(UTC)}
             database.asr_chunks.update_one({"_id": chunk_id}, {"$setOnInsert": saved}, upsert=True)
         segments.extend(saved["segments"])
+        actual = saved.get("runtime", {})
+        if actual and actual not in runtimes:
+            runtimes.append(actual)
+        recording["asr_runtime"], recording["asr_runtimes"] = actual, runtimes
         owned_update(database, recording, {"asr_chunks_done": index + 1,
+                     "asr_runtime": actual, "asr_runtimes": runtimes,
                      "asr_audio_seconds": offset + len(audio) / 16000,
                      "asr_progress_at": datetime.now(UTC)})
         del audio
@@ -150,6 +144,8 @@ def process_recording(database, recording: dict) -> None:
                     "segments": segments, "full_text": full_text,
                     "embedding_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
                     "created_at": datetime.now(UTC), "asr_attempt_count": recording["asr_attempt_count"]}
+        document["asr_runtime"] = recording.get("asr_runtime", {})
+        document["asr_runtimes"] = recording.get("asr_runtimes", [])
         vector = embed_text(full_text)
         if vector:
             document["embedding"] = vector

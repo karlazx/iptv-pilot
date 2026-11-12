@@ -36,6 +36,16 @@ RUN if [ "$INSTALL_SYSTEM_FFMPEG" = "1" ]; then \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
+ARG INSTALL_OPENVINO_DEPS=0
+COPY requirements/openvino.txt ./requirements/openvino.txt
+RUN if [ "$INSTALL_OPENVINO_DEPS" = "1" ]; then \
+      apt-get -o Acquire::Retries=3 update \
+      && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        intel-opencl-icd \
+      && rm -rf /var/lib/apt/lists/* \
+      && pip install --index-url "$PYPI_INDEX_URL" --no-cache-dir -r requirements/openvino.txt; \
+    fi
+
 COPY iptv_pilot ./iptv_pilot
 COPY scripts ./scripts
 
