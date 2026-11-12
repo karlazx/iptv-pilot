@@ -137,6 +137,14 @@ def test_reclaimed_capture_cannot_finalize_previous_attempt(database):
     assert database.transcripts.count_documents({}) == 0
 
 
+def test_live_final_preserves_optional_transcript_embedding(database, monkeypatch):
+    row = recording(database)
+    done_chunks(database, row)
+    monkeypatch.setattr(live, "embed_text", lambda text: [.1, .2])
+    live.finalize(database)
+    assert database.transcripts.find_one({"recording_id": row["_id"]})["embedding"] == [.1, .2]
+
+
 def test_api_hides_unpublished_formal_summary(database, monkeypatch):
     from fastapi import HTTPException
 

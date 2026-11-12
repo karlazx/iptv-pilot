@@ -12,6 +12,7 @@ from pymongo import ReturnDocument
 
 from iptv_pilot.asr.audio import audio_windows
 from iptv_pilot.asr.inference import get_session
+from iptv_pilot.common.embedding import embed_text
 from iptv_pilot.common.live import (
     core_segments,
     merge_chunks,
@@ -102,6 +103,14 @@ def finalize(database):
                     "program_title": row["program_title"], "start_time": row["start_time"],
                     "segments": segments, "full_text": text, "live_epoch": row["live_epoch"], "verified": True,
                     "asr_runtime": rows[-1].get("runtime", {}), "created_at": datetime.now(UTC)}
+        try:
+            vector = embed_text(text)
+            if vector:
+                document.update(embedding=vector, embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"))
+        except Exception:
+            database.recordings.update_one(condition, {"$set": {"live_state": "fallback",
+                                             "asr_state": "waiting", "live_error": "embedding unavailable"}})
+            continue
         # Capture is terminal and the current epoch is sealed; no live writer can replace it.
         database.transcripts.update_one({"recording_id": row["_id"]}, {"$set": document}, upsert=True)
         transcript = database.transcripts.find_one({"recording_id": row["_id"]}, {"_id": 1})
