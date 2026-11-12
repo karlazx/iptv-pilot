@@ -1460,6 +1460,8 @@ def set_recording_encoding(payload: RecordingEncodeUpdate) -> dict:
 
 @app.get("/api/system/status")
 def system_status() -> dict:
+    from iptv_pilot.common.runtime import pipeline_status
+
     running = list(
         database.recordings.find(
             {"status": "recording"},
@@ -1480,6 +1482,7 @@ def system_status() -> dict:
     )
     epg_latest = database.epg_programs.find_one(sort=[("start_time", -1)]) or {}
     return {
+        "pipeline": serialize(pipeline_status(database, now)),
         "channels": database.channels.count_documents({"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}),
         "epg_programs": database.epg_programs.count_documents({}),
         "epg_upcoming_24h": epg_upcoming,
