@@ -8,6 +8,8 @@
    总任务时间预算在段间检查，不是单段推理的硬中断。
 2. 媒体基础镜像包含 FFmpeg、PyAV 和 NumPy，供 recorder、encoder、web 使用；只有 ASR 使用 Whisper 镜像。
    发布仍生成三个变体，部署可只选择一个服务。基础依赖、媒体依赖和模型依赖分层安装。
+   发布依赖缓存保存在 GHCR 的 buildcache 标签中，避免新 Git 标签无法读取旧 GHA 缓存。
+   手动运行 Release 工作流只预热缓存，不发布新运行镜像或 GitHub Release；首次填充后供后续版本复用。
 3. 紧凑模式将调度、EPG、质量检测、源同步、LLM、推送放入一个后台进程的独立线程。
    每个任务独立轮询和处理异常，复用数据库连接；录制、转码和转写继续独立运行。
 
@@ -44,6 +46,7 @@ docker compose -f docker-compose.yml -f docker-compose.search.yml --profile sear
 应用 worker 不再隐式注入整份 `.env`，修改部署标签不会改变无关容器的环境。
 
 脚本默认只展示计划：
+部署宿主机只需 Python 3.10+ 和 Docker CLI；应用本身仍在 Python 3.12 容器中运行。
 
 ```bash
 python -m scripts.deploy --project-dir . --api http://localhost:8080 \
