@@ -40,6 +40,12 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         content = response.choices[0].message.content or "{}"
         result = json.loads(content)
+        if "follow_up" in result:
+            follow_up = result["follow_up"]
+            if follow_up is None:
+                result["follow_up"] = ""
+            elif isinstance(follow_up, list) and all(isinstance(item, str) for item in follow_up):
+                result["follow_up"] = "\n".join(follow_up)
         validate_summary(result)
         return result
 

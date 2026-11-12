@@ -26,7 +26,7 @@ def run_once(database) -> None:
         if database.recordings.find_one({"_id": saved["recording_id"], "summary_state": "done",
                                          "summary_generation": saved.get("generation")}):
             database.summaries.update_one({"_id": saved["_id"], "generation": saved["generation"]},
-                                         {"$set": {"ready_for_push": True}})
+                                         {"$set": {"ready_for_push": True, "push_processed": False}})
     now = datetime.now(UTC)
     retry_ready = {
         "$or": [
@@ -91,7 +91,8 @@ def run_once(database) -> None:
             **summary,
             "pushed": False,
             "push_enabled": recording.get("push_enabled", True),
-            "push_processed": False,
+            # Older push workers understand this flag, so rollback stays safe.
+            "push_processed": True,
             "llm_provider": os.getenv("LLM_PROVIDER", "mock"),
             "llm_model": os.getenv("LLM_MODEL", ""),
             "created_at": datetime.now(UTC),
@@ -111,7 +112,7 @@ def run_once(database) -> None:
         if not published.matched_count:
             return
         database.summaries.update_one({"recording_id": recording["_id"], "generation": recording["summary_generation"]},
-                                     {"$set": {"ready_for_push": True}})
+                                     {"$set": {"ready_for_push": True, "push_processed": False}})
         if recording.get("auto_bookmark"):
             saved_summary = database.summaries.find_one({"recording_id": recording["_id"]})
             database.bookmarks.update_one(

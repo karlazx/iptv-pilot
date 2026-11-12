@@ -11,6 +11,20 @@ from iptv_pilot.llm.live import preview_once, reduce_text
 from iptv_pilot.llm.providers import MockProvider
 
 
+@pytest.mark.parametrize("follow_up,expected", [(None, ""), ([], ""), (["action one", "action two"], "action one\naction two")])
+def test_llm_optional_follow_up_accepts_null_or_string_list(monkeypatch, follow_up, expected):
+    import json
+    from types import SimpleNamespace
+
+    from iptv_pilot.llm import providers
+
+    payload = {"summary_text": "summary", "key_points": [], "entities": [], "follow_up": follow_up}
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: response)))
+    monkeypatch.setattr(providers, "OpenAI", lambda **kw: client)
+    assert providers.OpenAICompatibleProvider("test", None, "test").summarize("text")["follow_up"] == expected
+
+
 def test_context_windows_have_contiguous_commit_ranges_without_losing_audio():
     import numpy as np
 
@@ -274,6 +288,15 @@ def test_final_owner_loss_cannot_publish_or_push(database, monkeypatch):
     monkeypatch.setattr(llm, "create_provider", Replaced)
     llm.run_once(database)
     assert database.summaries.count_documents({}) == 0
+
+
+def test_final_push_publication_recovers_after_crash(database):
+    row = recording(database, summary_state="done", summary_generation=2)
+    sid = database.summaries.insert_one({"recording_id": row["_id"], "generation": 2,
+                                         "ready_for_push": False, "push_processed": True}).inserted_id
+    llm.run_once(database)
+    saved = database.summaries.find_one({"_id": sid})
+    assert saved["ready_for_push"] is True and saved["push_processed"] is False
 
 
 def test_retry_does_not_redeliver_successful_push_channel(database, monkeypatch):
