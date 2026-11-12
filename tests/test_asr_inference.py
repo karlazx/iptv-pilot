@@ -103,6 +103,24 @@ def test_model_and_configuration_changes_invalidate_cached_session(monkeypatch):
     assert inference.get_session("base") is not second
 
 
+def test_failed_model_change_does_not_break_the_previous_configuration(monkeypatch):
+    monkeypatch.setenv("ASR_DEVICE", "cpu")
+    calls = fake_cpu(monkeypatch)
+    inference.get_session("small")
+    load = inference.Session._load_faster
+
+    def missing(self, device):
+        if self.model_name == "medium":
+            raise RuntimeError("model not cached")
+        load(self, device)
+
+    monkeypatch.setattr(inference.Session, "_load_faster", missing)
+    with pytest.raises(RuntimeError, match="not cached"):
+        inference.get_session("medium")
+    assert inference.get_session("small").model_name == "small"
+    assert calls == ["cpu", "cpu"]
+
+
 def test_cpu_fallback_does_not_inherit_gpu_only_precision(monkeypatch):
     import sys
 
@@ -123,4 +141,16 @@ def test_configuration_typo_is_not_hidden_by_fallback(monkeypatch, device, backe
     monkeypatch.setenv("ASR_BACKEND", backend)
     with pytest.raises(ValueError):
         inference.get_session("small")
+
+
+def test_segment_crossing_removed_silence_restores_each_endpoint():
+    # Speech in [0,10] and [30,40] becomes a compact [0,20] input.
+    # The segment [8,12] spans that removed 20-second gap.
+    mapping = SimpleNamespace(get_original_time=lambda t: t if t < 10 else t + 20)
+    chunks = [SimpleNamespace(start_ts=8, end_ts=12, text=" bridge "),
+              SimpleNamespace(start_ts=17, end_ts=-1, text="tail")]
+    assert inference.restore_chunks(chunks, mapping, 20) == [
+        {"start": 8, "end": 32, "text": "bridge"},
+        {"start": 37, "end": 40, "text": "tail"},
+    ]
 

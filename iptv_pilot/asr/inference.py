@@ -18,6 +18,19 @@ class GpuUnavailable(RuntimeError):
         self.reason = reason
 
 
+def restore_chunks(chunks, mapping, duration: float) -> list[dict]:
+    segments = []
+    for chunk in chunks:
+        start = max(0.0, min(float(chunk.start_ts), duration))
+        end = duration if chunk.end_ts < 0 else min(float(chunk.end_ts), duration)
+        # A segment may span two speech intervals separated by removed silence.
+        # Map each endpoint independently, just like faster-whisper's segments.
+        segments.append({"start": mapping.get_original_time(start),
+                         "end": mapping.get_original_time(max(start, end)),
+                         "text": chunk.text.strip()})
+    return segments
+
+
 def configuration(model: str) -> tuple:
     return (model, *(os.getenv(name, default) for name, default in (
         ("ASR_BACKEND", "auto"), ("ASR_DEVICE", "auto"),
@@ -150,14 +163,7 @@ class Session:
         config.task, config.return_timestamps, config.num_beams = "transcribe", True, 1
         result = self.model.generate(compact, config)
         duration = len(compact) / 16000
-        segments = []
-        for chunk in result.chunks:
-            start = max(0.0, min(float(chunk.start_ts), duration))
-            end = duration if chunk.end_ts < 0 else min(float(chunk.end_ts), duration)
-            index = mapping.get_chunk_index((start + end) / 2)
-            segments.append({"start": mapping.get_original_time(start, index),
-                             "end": mapping.get_original_time(max(start, end), index),
-                             "text": chunk.text.strip()})
+        segments = restore_chunks(result.chunks, mapping, duration)
         if not segments and any(t.strip() for t in result.texts):
             raise RuntimeError("GPU transcript has no segment timestamps")
         return segments
@@ -166,7 +172,7 @@ class Session:
 def get_session(model: str) -> Session:
     global _session, _session_key
     key = configuration(model)
-    if key != _session_key:
+    if _session is None or key != _session_key:
         _session = None
         gc.collect()
         _session = Session(model)
