@@ -1363,7 +1363,7 @@ async function renderSystem() {
   ]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
   const pipelineLabels = { asr: "语音转写", encoder: "录像压缩", llm: "节目摘要" };
-  const pipelineRows = Object.entries(status.pipeline || {}).map(([name, row]) => `<tr><td>${esc(pipelineLabels[name] || name)}</td><td>${row.pending}</td><td>${row.active}</td><td>${row.blocked || 0}</td><td>${row.failed}</td><td><span class="badge ${row.stalled ? "danger" : "success"}">${row.draining ? "等待维护" : row.stalled ? "进度异常" : "正常"}</span></td><td>${esc(formatDateTime(row.last_success_at))}</td></tr>`).join("");
+  const pipelineRows = Object.entries(status.pipeline || {}).map(([name, row]) => `<tr><td>${esc(pipelineLabels[name] || name)}</td><td>${row.pending}${row.retrying ? `（退避 ${row.retrying}）` : ""}</td><td>${row.active}</td><td>${row.blocked || 0}</td><td>${row.failed}</td><td><span class="badge ${row.stalled ? "danger" : "success"}">${row.draining ? "等待维护" : row.stalled ? "进度异常" : "正常"}</span></td><td>${esc(formatDateTime(row.last_success_at))}</td></tr>`).join("");
   const profileOptions = Object.values(buffer.profiles || {}).map(row => `<option value="${esc(row.key)}" ${row.key === buffer.profile ? "selected" : ""}>${esc(row.label)}（缓冲 ${row.buffer_duration}s · 同步 ${row.live_sync} 段）</option>`).join("");
   const pushEmail = push?.email || {};
   const pushProviderOptions = [["none", "关闭"], ["email", "邮箱"]]

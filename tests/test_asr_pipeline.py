@@ -137,3 +137,23 @@ def test_queue_health_warns_when_ready_work_is_not_claimed(database):
 
     queued(database, completed_at=datetime.now(UTC) - timedelta(hours=1))
     assert pipeline_status(database)["asr"]["stalled"] is True
+
+
+@pytest.mark.parametrize("stage,status,retry", [
+    ("asr", "completed", "next_asr_attempt_at"),
+    ("encoder", "summarized", "next_encode_attempt_at"),
+    ("llm", "asr_done", "next_summary_attempt_at"),
+])
+@pytest.mark.parametrize("delay", [600, -5])
+def test_queue_health_respects_backoff_and_when_work_became_ready(
+    database, stage, status, retry, delay
+):
+    from iptv_pilot.common.runtime import pipeline_status
+
+    now = datetime.now(UTC)
+    queued(database, status=status, completed_at=now-timedelta(hours=2),
+           encode_status="pending", **{retry: now+timedelta(seconds=delay)})
+    result = pipeline_status(database, now)[stage]
+    assert result["pending"] == 1
+    assert result["retrying"] == (1 if delay > 0 else 0)
+    assert result["stalled"] is False

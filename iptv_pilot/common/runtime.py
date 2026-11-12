@@ -34,32 +34,38 @@ def pipeline_status(database, now=None) -> dict:
     specs = {
         "asr": ({"status": "completed", "asr_enabled": {"$ne": False}},
                 {"status": "asr_processing"}, {"status": "asr_failed"},
-                "asr_progress_at", "asr_started_at", "asr_completed_at"),
+                "asr_progress_at", "asr_started_at", "asr_completed_at", "next_asr_attempt_at"),
         "encoder": ({"encode_status": "pending", "$or": [
             {"status": {"$in": ["summarized", "asr_failed", "summary_failed"]}},
             {"status": "asr_done", "llm_enabled": False},
             {"status": "completed", "asr_enabled": False}]},
             {"encode_status": "encoding"}, {"encode_status": "failed"},
-            "encode_progress_at", "encode_started_at", "encoded_at"),
+            "encode_progress_at", "encode_started_at", "encoded_at", "next_encode_attempt_at"),
         "llm": ({"status": "asr_done", "llm_enabled": {"$ne": False}},
                 {"status": "summarizing"}, {"status": "summary_failed"},
-                "summary_started_at", "summary_started_at", "summary_completed_at"),
+                "summary_started_at", "summary_started_at", "summary_completed_at", "next_summary_attempt_at"),
     }
     result = {}
-    for name, (waiting, active, failed, progress, started, completed) in specs.items():
-        oldest = database.recordings.find_one(waiting, sort=[("completed_at", 1)]) or {}
-        oldest_at = oldest.get("completed_at")
+    for name, (waiting, active, failed, progress, started, completed, retry) in specs.items():
+        pending = list(database.recordings.find(waiting, {"completed_at": 1, retry: 1}))
+        ready = [row for row in pending if row.get(retry) is None or
+                 (isinstance(row[retry], datetime) and row[retry] <= now)]
+        ready_times = [max(row.get("completed_at") or now,
+                           row.get(retry) or row.get("completed_at") or now) for row in ready]
+        oldest_ready = min(ready_times, default=None)
+        oldest_at = min((row.get("completed_at") or now for row in pending), default=None)
         running = list(database.recordings.find(active, {progress: 1, started: 1}))
         stalled_active = any(now - (r.get(progress) or r.get(started) or now) > progress_limit
                              for r in running)
-        stalled_waiting = bool(oldest_at and now-oldest_at > wait_limit and not running)
+        stalled_waiting = bool(oldest_ready and now-oldest_ready > wait_limit and not running)
         latest = database.recordings.find_one({completed: {"$type": "date"}},
                                               sort=[(completed, -1)]) or {}
-        result[name] = {"pending": database.recordings.count_documents(waiting),
+        result[name] = {"pending": len(pending), "retrying": len(pending)-len(ready),
                         "active": len(running), "failed": database.recordings.count_documents(failed),
-                        "oldest_pending_at": oldest_at, "last_success_at": latest.get(completed),
+                        "oldest_pending_at": oldest_at, "oldest_ready_at": oldest_ready,
+                        "last_success_at": latest.get(completed),
                         "stalled": (stalled_active or stalled_waiting) and not is_draining(database, name),
                         "draining": is_draining(database, name)}
     ready = result["encoder"]["pending"]
-    result["encoder"]["blocked"] = database.recordings.count_documents({"encode_status": "pending"})-ready
+    result["encoder"]["blocked"] = max(0, database.recordings.count_documents({"encode_status": "pending"})-ready)
     return result
