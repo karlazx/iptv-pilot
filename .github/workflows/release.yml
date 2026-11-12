@@ -44,6 +44,14 @@ jobs:
               INSTALL_FFMPEG=0
               INSTALL_SYSTEM_FFMPEG=1
               INSTALL_EMBEDDING_DEPS=0
+          - variant: asr-intel
+            suffix: -asr-intel
+            build_args: |
+              INSTALL_AI_DEPS=1
+              INSTALL_FFMPEG=1
+              INSTALL_SYSTEM_FFMPEG=0
+              INSTALL_EMBEDDING_DEPS=0
+              INSTALL_OPENVINO_DEPS=1
     steps:
       - uses: actions/checkout@v4
 

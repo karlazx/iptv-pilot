@@ -63,6 +63,7 @@ docker compose ps
 
 - [部署指南](docs/deploy.md)
 - [紧凑模式、任务恢复与定向升级](docs/runtime-optimization.md)
+- [ASR CPU/GPU 加速与自动回退](docs/asr-acceleration.md)
 - [首次添加直播源](docs/live-sources.md)
 - [REST API](docs/api.md)
 - [系统架构](docs/architecture.md)

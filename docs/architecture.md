@@ -24,13 +24,14 @@ scheduler ──► recorder ──► ASR ──► LLM ──► push
 
 ## 服务与镜像
 
-三个镜像变体由同一个 `Dockerfile` 用不同构建参数生成，发布时共用 `<版本>` 前缀：
+镜像变体由同一个 `Dockerfile` 用不同构建参数生成，发布时共用 `<版本>` 前缀，部署只需拉取所用变体：
 
 | 镜像后缀 | 构建参数 | 用于 |
 | --- | --- | --- |
-| （无） | `INSTALL_AI_DEPS=0 INSTALL_FFMPEG=1` | 除下列两项外的所有服务 |
+| （无） | `INSTALL_AI_DEPS=0 INSTALL_FFMPEG=1` | 除下列专用镜像项外的所有服务 |
 | `-ai` | `INSTALL_AI_DEPS=1 INSTALL_FFMPEG=1` | `asr` |
 | `-live-normalizer` | `INSTALL_SYSTEM_FFMPEG=1` | `live-normalizer`（`hardware-accel` profile） |
+| `-asr-intel` | `INSTALL_AI_DEPS=1` + `INSTALL_OPENVINO_DEPS=1` | 可选 Intel GPU ASR，包含 CPU 回退；仅替换 ASR 服务 |
 
 基础媒体镜像包含 PyAV、NumPy 和 FFmpeg；`-ai` 在此基础上追加 faster-whisper。
 默认 compact profile 用 background 合并轻量后台任务；split profile 保留独立 worker。

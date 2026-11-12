@@ -1,0 +1,21 @@
+# Optional Intel ASR runtime. CPU-only deployments do not need this override.
+# The directory bind is allowed to be empty on machines without DRM devices;
+# unlike a mandatory devices mapping, it does not prevent CPU fallback startup.
+services:
+  asr:
+    image: ${IPTV_PILOT_ASR_INTEL_IMAGE:-ghcr.io/karlazx/iptv-pilot}:${ASR_INTEL_TAG:-local-asr-intel}
+    build:
+      args:
+        INSTALL_AI_DEPS: "1"
+        INSTALL_FFMPEG: "1"
+        INSTALL_OPENVINO_DEPS: "1"
+    environment:
+      ASR_BACKEND: ${ASR_BACKEND:-auto}
+    volumes:
+      - type: bind
+        source: ${ASR_DRI_PATH:-/dev/dri}
+        target: /dev/dri
+        bind:
+          create_host_path: true
+    device_cgroup_rules:
+      - 'c 226:* rmw'

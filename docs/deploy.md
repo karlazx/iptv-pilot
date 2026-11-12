@@ -82,6 +82,9 @@ ASR_BACKEND=faster_whisper
 
 模型体积较大，第一次转写也会更慢；可通过 `MODELS_PATH` 复用本地 Hugging Face 缓存，并用 `HF_HUB_OFFLINE=1` 避免联网检查。使用已发布的 AI 镜像时，设置 `IPTV_PILOT_AI_IMAGE=ghcr.io/karlazx/iptv-pilot`、`IPTV_PILOT_AI_TAG=<版本>-ai`，并把 `IPTV_PILOT_AI_PULL_POLICY` 改为 `missing`（本地构建保持 `never`）。
 
+需要 Intel GPU ASR 时，使用可选的 `-asr-intel` 镜像和 [ASR 加速说明](asr-acceleration.md) 中的设备配置。
+自动模式在设备、驱动、模型或推理不可用时回退 CPU，不必升级其它服务。
+
 Web 服务与其它 worker 共用基础镜像，其中已包含 imageio-ffmpeg，可直接在浏览器播放录像，不再需要单独的 `-web` 镜像。
 
 需要生成真实摘要时，配置任一受支持的 LLM Provider 及其 API Key。OpenAI 兼容的自定义服务使用 `LLM_PROVIDER=custom`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。
