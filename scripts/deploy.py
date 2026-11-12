@@ -54,7 +54,14 @@ def main():
     args = parser.parse_args()
     root = args.project_dir.resolve()
     override = root / "docker-compose.deploy.json"
-    files = [root / name for name in (args.compose_file or ["docker-compose.yml"])]
+    env_path = root / ".env"
+    local_env = {}
+    if env_path.exists():
+        local_env = dict(line.split("=", 1) for line in env_path.read_text().splitlines()
+                         if line and not line.lstrip().startswith("#") and "=" in line)
+    configured_files = os.getenv("COMPOSE_FILE") or local_env.get("COMPOSE_FILE", "docker-compose.yml")
+    names = args.compose_file or configured_files.strip("\"'").split(os.pathsep)
+    files = [root / name for name in names if (root / name).resolve() != override.resolve()]
     previous = json.loads(override.read_text()) if override.exists() else {"services": {}}
     desired = json.loads(json.dumps(previous))
     targets = (json.loads(args.rollback.read_text())["rollback_images"] if args.rollback
@@ -151,6 +158,12 @@ def main():
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(3)
+        # Keep a later plain `docker compose up` from undoing this deployment.
+        value = os.pathsep.join(os.path.relpath(path, root) for path in files + [override])
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        lines = [line for line in lines if not line.startswith("COMPOSE_FILE=")]
+        lines.append("COMPOSE_FILE=" + value)
+        env_path.write_text("\n".join(lines) + "\n")
         print(f"Deployment verified. Rollback state: {backup / 'state.json'}")
     except Exception:
         if replacement_started and rollback_images:

@@ -63,6 +63,8 @@ def test_scoped_upgrade_waits_preserves_rollback_and_only_restarts_target(tmp_pa
     state = json.loads(state_file.read_text())
     assert state["rollback_images"]["encoder"].startswith("iptv-pilot-rollback:encoder-")
     assert (state_file.parent / ".env").read_text() == "PRIVATE_SETTING=local-only"
+    assert "docker-compose.deploy.json" in (tmp_path / ".env").read_text()
+    assert "PRIVATE_SETTING=local-only" in (tmp_path / ".env").read_text()
     assert calls[-1] == ["maintenance", "False"]
 
 
