@@ -37,3 +37,5 @@ data/
 .idea/
 .vscode/
 *.swp
+.deploy-history/
+docker-compose.deploy.json

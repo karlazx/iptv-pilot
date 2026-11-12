@@ -88,7 +88,7 @@ def evaluate_channel(channel: dict, urls: list[str], sample_count: int, timeout:
     return channel, [assess(url, sample_count, timeout) for url in urls]
 
 
-def run_once(sample_count: int, timeout: float, workers: int) -> tuple[int, int]:
+def run_once(sample_count: int, timeout: float, workers: int, database=None) -> tuple[int, int]:
     from iptv_pilot.sources import store
     from iptv_pilot.sources.models import (
         ordered_sources,
@@ -96,7 +96,8 @@ def run_once(sample_count: int, timeout: float, workers: int) -> tuple[int, int]
         resolve_active,
     )
 
-    database = connect_database()
+    if database is None:
+        database = connect_database()
     channel_rows = list(
         database.channels.find(
             {"enabled": True, "m3u_url": {"$exists": True}},

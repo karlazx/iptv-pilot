@@ -55,9 +55,9 @@ def claim_job(database):
                 {"status": "asr_processing", **stale_query(now)},
             ]},
         ]},
-        {"$set": {"status": "asr_processing", "asr_started_at": now,
-                  "asr_heartbeat_at": now, "asr_claim_id": uuid.uuid4().hex},
-         "$inc": {"asr_attempt_count": 1}},
+        [{"$set": {"status": "asr_processing", "asr_started_at": now,
+                   "asr_heartbeat_at": now, "asr_claim_id": uuid.uuid4().hex,
+                   "asr_attempt_count": {"$add": [{"$ifNull": ["$asr_attempt_count", 0]}, 1]}}}],
         sort=[("completed_at", -1)], return_document=ReturnDocument.AFTER,
     )
 

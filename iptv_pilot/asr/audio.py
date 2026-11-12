@@ -14,7 +14,11 @@ def audio_windows(path: str, seconds: int = 300, sample_rate: int = 16000) -> It
     with av.open(path, mode="r") as source:
         resampler = av.AudioResampler(format="fltp", layout="mono", rate=sample_rate)
         for packet in source.demux(audio=0):
-            for frame in packet.decode():
+            try:
+                frames = packet.decode()
+            except av.error.InvalidDataError:
+                continue
+            for frame in frames:
                 for converted in resampler.resample(frame):
                     samples = converted.to_ndarray().reshape(-1)
                     while samples.size:

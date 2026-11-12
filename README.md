@@ -53,7 +53,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://你的_NAS_IP:5190`。配套的 iptv-api 服务默认使用端口 `5181`。
+打开 `http://你的_NAS_IP:5190`。默认使用紧凑后台模式；需要内置源订阅器时，在 `COMPOSE_PROFILES` 中添加 `iptv-api`，其默认端口为 `5181`。
 
 全新部署显示 0 个频道是预期状态。最快的验证方式是在“系统设置 → 频道管理”点击“添加频道”，填入一个自有或已获授权的 HLS 地址；已有频道清单或 M3U/TXT 订阅时，可使用批量导入助手。完整步骤见[首次添加直播源](docs/live-sources.md)。
 
@@ -62,6 +62,7 @@ docker compose ps
 ## 文档
 
 - [部署指南](docs/deploy.md)
+- [紧凑模式、任务恢复与定向升级](docs/runtime-optimization.md)
 - [首次添加直播源](docs/live-sources.md)
 - [REST API](docs/api.md)
 - [系统架构](docs/architecture.md)

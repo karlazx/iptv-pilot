@@ -1496,6 +1496,10 @@ def system_status() -> dict:
             )
         },
         "recordings_running": len(running),
+        "recordings_imminent": database.recordings.count_documents({
+            "status": "queued", "scheduled_start": {"$lte": now + timedelta(minutes=5)},
+            "scheduled_end": {"$gte": now},
+        }),
         "recordings_queued": database.recordings.count_documents(
             {"status": "queued", "scheduled_start": {"$lte": now}}
         ),
@@ -1517,6 +1521,32 @@ def system_status() -> dict:
         ),
         "normalizer_pool": _normalizer_pool(),
     }
+
+
+class MaintenanceUpdate(BaseModel):
+    services: list[str]
+    draining: bool
+
+
+@app.get("/api/system/maintenance")
+def get_maintenance() -> dict:
+    from iptv_pilot.common.runtime import maintenance_status
+
+    return maintenance_status(database)
+
+
+@app.post("/api/system/maintenance")
+def set_maintenance(payload: MaintenanceUpdate) -> dict:
+    from iptv_pilot.common.runtime import maintenance_status
+
+    allowed = {"recorder", "encoder", "asr", "llm", "push", "web", "background",
+               "scheduler", "epg-engine", "stream-quality", "channel-sync"}
+    if not payload.services or not set(payload.services) <= allowed:
+        raise HTTPException(status_code=422, detail="不支持的维护服务")
+    for name in payload.services:
+        database.settings.update_one({"key": f"drain:{name}"},
+                                     {"$set": {"value": payload.draining}}, upsert=True)
+    return maintenance_status(database)
 
 
 def _normalizer_pool() -> dict:

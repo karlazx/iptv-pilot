@@ -45,3 +45,10 @@ jobs:
         run: cp .env.example .env && docker compose config --quiet
       - name: Build lightweight web image
         run: docker compose build web
+      - name: Verify media dependencies without Whisper
+        run: docker run --rm --entrypoint python iptv-pilot:local -c "import av, numpy, imageio_ffmpeg, importlib.util; assert importlib.util.find_spec('faster_whisper') is None"
+      - name: Validate deployment modes
+        run: |
+          COMPOSE_PROFILES=split,ai docker compose config --quiet
+          COMPOSE_PROFILES=compact,ai,iptv-api docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.search.yml --profile search config --quiet

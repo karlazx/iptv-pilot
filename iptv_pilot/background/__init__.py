@@ -1,0 +1,1 @@
+"""Compact control-plane worker."""

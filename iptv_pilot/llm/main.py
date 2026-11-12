@@ -13,10 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 def run_once(database) -> None:
+    from iptv_pilot.common.runtime import is_draining
+
+    if is_draining(database, "llm"):
+        return
     now = datetime.now(UTC)
     retry_ready = {
         "$or": [
-            {"next_summary_attempt_at": {"$exists": False}},
+            {"next_summary_attempt_at": None},
             {"next_summary_attempt_at": {"$lte": now}},
         ]
     }
@@ -62,7 +66,8 @@ def run_once(database) -> None:
         )
         database.recordings.update_one(
             {"_id": recording["_id"]},
-            {"$set": {"status": "summarized", "error": None, "next_summary_attempt_at": None}},
+            {"$set": {"status": "summarized", "error": None, "next_summary_attempt_at": None,
+                      "summary_completed_at": datetime.now(UTC)}},
         )
         if recording.get("auto_bookmark"):
             saved_summary = database.summaries.find_one({"recording_id": recording["_id"]})
