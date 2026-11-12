@@ -70,6 +70,8 @@ def chunks(database, row):
 def finalize(database):
     for row in database.recordings.find({"status": {"$in": ["recording", "completed"]},
                                          "live_state": {"$in": ["streaming", "sealed"]}}).limit(20):
+        if row.get("claim_id", row["live_epoch"]) != row["live_epoch"]:
+            continue
         rows = chunks(database, row)
         _, upper = programme_bounds(row)
         if row["status"] == "recording":
@@ -139,7 +141,7 @@ def run_once(database):
     row = database.recordings.find_one({"_id": job["recording_id"], "live_epoch": job["epoch"],
                                       "live_state": {"$in": ["streaming", "sealed"]},
                                       "status": {"$in": ["recording", "completed"]}})
-    if not row:
+    if not row or row.get("claim_id", job["epoch"]) != job["epoch"]:
         cancelled = database.live_chunks.update_one(owner, {"$set": {"state": "cancelled"}})
         if cancelled.matched_count:
             remove_audio(job["path"])

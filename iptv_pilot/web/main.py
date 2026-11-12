@@ -1145,20 +1145,20 @@ def epg_search(
 
 @app.get("/api/summaries/latest")
 def latest_summaries(limit: int = Query(10, ge=1, le=100)) -> list[dict]:
-    return serialize(list(database.summaries.find({}, {"embedding": 0}).sort("created_at", -1).limit(limit)))
+    return serialize(list(database.summaries.find({"ready_for_push": {"$ne": False}}, {"embedding": 0}).sort("created_at", -1).limit(limit)))
 
 
 @app.get("/api/summaries")
 def summaries(target_date: date = Query(alias="date")) -> list[dict]:
     start, end = local_day_window(target_date)
     return serialize(
-        list(database.summaries.find({"created_at": {"$gte": start, "$lt": end}}, {"embedding": 0}))
+        list(database.summaries.find({"created_at": {"$gte": start, "$lt": end}, "ready_for_push": {"$ne": False}}, {"embedding": 0}))
     )
 
 
 @app.get("/api/summaries/{summary_id}")
 def summary_detail(summary_id: str) -> dict:
-    summary = database.summaries.find_one({"_id": object_id(summary_id)}, {"embedding": 0})
+    summary = database.summaries.find_one({"_id": object_id(summary_id), "ready_for_push": {"$ne": False}}, {"embedding": 0})
     if not summary:
         raise HTTPException(status_code=404, detail="节目摘要不存在")
     transcript = database.transcripts.find_one({"_id": summary.get("transcript_id")}, {"embedding": 0})
@@ -1167,7 +1167,7 @@ def summary_detail(summary_id: str) -> dict:
 
 @app.get("/api/search")
 def search(q: str = Query(min_length=1), vector: bool = False) -> dict:
-    summary_rows = list(database.summaries.find({"$text": {"$search": q}}, {"embedding": 0}).limit(30))
+    summary_rows = list(database.summaries.find({"$text": {"$search": q}, "ready_for_push": {"$ne": False}}, {"embedding": 0}).limit(30))
     transcript_rows = list(
         database.transcripts.find(
             {"full_text": {"$regex": re.escape(q), "$options": "i"}},
@@ -1314,7 +1314,7 @@ def recording_detail(recording_id: str) -> dict:
         {"recording_id": recording["_id"]}, {"embedding": 0, "segments": 0}
     )
     summary = database.summaries.find_one(
-        {"recording_id": recording["_id"]}, {"embedding": 0}
+        {"recording_id": recording["_id"], "ready_for_push": {"$ne": False}}, {"embedding": 0}
     )
     events = []
     if summary:

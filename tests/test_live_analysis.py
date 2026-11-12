@@ -130,6 +130,31 @@ def test_programme_end_allows_audio_sample_rounding(database):
     assert database.recordings.find_one({"_id": row["_id"]})["asr_state"] == "done"
 
 
+def test_reclaimed_capture_cannot_finalize_previous_attempt(database):
+    row = recording(database, claim_id="new-owner")
+    done_chunks(database, row)
+    live.finalize(database)
+    assert database.transcripts.count_documents({}) == 0
+
+
+def test_api_hides_unpublished_formal_summary(database, monkeypatch):
+    from fastapi import HTTPException
+
+    from iptv_pilot.web import main as web
+
+    monkeypatch.setattr(web, "database", database)
+    row = recording(database)
+    sid = database.summaries.insert_one({"recording_id": row["_id"], "ready_for_push": False,
+                                         "created_at": datetime.now(UTC)}).inserted_id
+    assert web.latest_summaries(10) == []
+    assert web.recording_detail(str(row["_id"]))["summary"] is None
+    with pytest.raises(HTTPException) as error:
+        web.summary_detail(str(sid))
+    assert error.value.status_code == 404
+    database.summaries.update_one({"_id": sid}, {"$set": {"ready_for_push": True}})
+    assert len(web.latest_summaries(10)) == 1
+
+
 def test_push_claim_blocks_concurrent_delivery(database, monkeypatch):
     from iptv_pilot.push import main as push
 
