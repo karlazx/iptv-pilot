@@ -155,6 +155,7 @@ function toast(message, tone = "") {
 }
 
 function openModal(title, html, wide = false) {
+  appState.liveDetailToken = null;
   const modal = $("#modal");
   $("#modal-title").textContent = title;
   $("#modal-body").innerHTML = html;
@@ -165,6 +166,7 @@ function openModal(title, html, wide = false) {
 }
 
 function closeModal() {
+  appState.liveDetailToken = null;
   if (appState.liveConnectTimer) {
     clearTimeout(appState.liveConnectTimer);
     appState.liveConnectTimer = null;
@@ -399,7 +401,7 @@ async function renderSubscriptions() {
 
 async function openSubscriptionForm(existing = null, preset = {}) {
   const channels = await loadChannels();
-  const value = { asr_enabled: true, asr_model: "small", llm_enabled: true, push_enabled: true, auto_bookmark: false, post_roll_seconds: 180, enabled: true, ...preset, ...(existing || {}) };
+  const value = { asr_enabled: true, live_asr_enabled: true, asr_model: "small", llm_enabled: true, push_enabled: true, auto_bookmark: false, post_roll_seconds: 180, enabled: true, ...preset, ...(existing || {}) };
   const type = value.match_type || "keyword";
   const weekdays = value.time_rule?.weekdays
     || (value.time_rule?.weekday === undefined || value.time_rule?.weekday === null ? [] : [value.time_rule.weekday]);
@@ -418,7 +420,7 @@ async function openSubscriptionForm(existing = null, preset = {}) {
       </div>
       <label class="field"><span>ASR 模型</span><select class="select" name="asr_model">${["tiny","base","small","medium"].map(model => `<option ${value.asr_model === model ? "selected" : ""}>${model}</option>`).join("")}</select></label>
       <label class="field"><span>录制缓冲（片尾）</span><select class="select" name="post_roll_seconds">${[["60","1 分钟"],["180","3 分钟（默认）"],["300","5 分钟"],["600","10 分钟"]].map(([sec, label]) => `<option value="${sec}" ${Number(value.post_roll_seconds || 180) === Number(sec) ? "selected" : ""}>${label}</option>`).join("")}</select></label>
-      <div class="field"><span>自动处理</span><div class="checks"><label class="check"><input type="checkbox" name="asr_enabled" ${value.asr_enabled ? "checked" : ""}>转写</label><label class="check"><input type="checkbox" name="llm_enabled" ${value.llm_enabled ? "checked" : ""}>摘要</label><label class="check"><input type="checkbox" name="push_enabled" ${value.push_enabled ? "checked" : ""}>邮件</label><label class="check"><input type="checkbox" name="auto_bookmark" ${value.auto_bookmark ? "checked" : ""}>自动收藏摘要</label></div></div>
+      <div class="field"><span>自动处理</span><div class="checks"><label class="check"><input type="checkbox" name="asr_enabled" ${value.asr_enabled ? "checked" : ""}>转写</label><label class="check"><input type="checkbox" name="live_asr_enabled" ${value.live_asr_enabled ? "checked" : ""}>录制时转写</label><label class="check"><input type="checkbox" name="llm_enabled" ${value.llm_enabled ? "checked" : ""}>摘要</label><label class="check"><input type="checkbox" name="push_enabled" ${value.push_enabled ? "checked" : ""}>邮件</label><label class="check"><input type="checkbox" name="auto_bookmark" ${value.auto_bookmark ? "checked" : ""}>自动收藏摘要</label></div></div>
       <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">${existing ? "保存修改" : "创建订阅"}</button></div>
     </form>`);
   const form = $("#subscription-form");
@@ -442,7 +444,7 @@ async function openSubscriptionForm(existing = null, preset = {}) {
         weekdays: data.getAll("weekday").map(Number), time: data.get("rule_time"),
         tolerance_min: Number(data.get("tolerance_min")), timezone: "Asia/Shanghai",
       } : null,
-      asr_enabled: data.has("asr_enabled"), asr_model: data.get("asr_model"),
+      asr_enabled: data.has("asr_enabled"), live_asr_enabled: data.has("live_asr_enabled"), asr_model: data.get("asr_model"),
       llm_enabled: data.has("llm_enabled"), push_enabled: data.has("push_enabled"),
       auto_bookmark: data.has("auto_bookmark"), post_roll_seconds: Number(data.get("post_roll_seconds")),
       enabled: existing ? Boolean(existing.enabled) : true,
@@ -483,7 +485,7 @@ async function renderRecordings() {
   };
   const scheduleRefresh = () => {
     clearTimeout(appState.recordingRefreshTimer);
-    const active = recordings.some(row => ["recording", "queued"].includes(row.status));
+    const active = recordings.some(row => ["recording", "queued", "completed", "asr_processing", "asr_done", "summarizing"].includes(row.status));
     if (!active) return;
     appState.recordingRefreshTimer = setTimeout(async () => {
       if (appState.renderToken !== renderToken) return;
@@ -523,7 +525,7 @@ function openManualRecording(channels) {
     <label class="field"><span>频道</span><select class="select" name="channel_id" required>${channelOptions(channels, "", false)}</select></label>
     <label class="field"><span>时长（秒）</span><input class="input" name="duration_sec" type="number" min="10" max="600" value="30" required></label>
     <label class="field"><span>ASR 模型</span><select class="select" name="asr_model"><option>tiny</option><option selected>base</option><option>small</option><option>medium</option></select></label>
-    <div class="field"><span>后续处理</span><div class="checks"><label class="check"><input type="checkbox" name="asr_enabled" checked>转写</label><label class="check"><input type="checkbox" name="llm_enabled" checked>摘要</label><label class="check"><input type="checkbox" name="push_enabled">邮件</label></div></div>
+    <div class="field"><span>后续处理</span><div class="checks"><label class="check"><input type="checkbox" name="asr_enabled" checked>转写</label><label class="check"><input type="checkbox" name="live_asr_enabled" checked>录制时转写</label><label class="check"><input type="checkbox" name="llm_enabled" checked>摘要</label><label class="check"><input type="checkbox" name="push_enabled">邮件</label></div></div>
     <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">开始录制</button></div>
   </form>`);
   $("#manual-form").addEventListener("submit", async event => {
@@ -531,7 +533,7 @@ function openManualRecording(channels) {
     try {
       await api("/api/recordings/manual", { method: "POST", body: {
         channel_id: data.get("channel_id"), duration_sec: Number(data.get("duration_sec")),
-        program_title: data.get("program_title").trim(), asr_enabled: data.has("asr_enabled"),
+        program_title: data.get("program_title").trim(), asr_enabled: data.has("asr_enabled"), live_asr_enabled: data.has("live_asr_enabled"),
         asr_model: data.get("asr_model"), llm_enabled: data.has("llm_enabled"), push_enabled: data.has("push_enabled"),
       }});
       toast("录制任务已创建"); closeModal(); renderRoute();
@@ -551,23 +553,47 @@ function summarySections(summary, transcript) {
 
 async function openRecordingDetail(recordingId) {
   openModal("录制详情", '<div class="page-loading"><span class="spinner"></span></div>', true);
+  const token = Symbol("recording-detail");
+  appState.liveDetailToken = token;
+  const refresh = async () => {
+  if (appState.liveDetailToken !== token) return;
   try {
     const detail = await api(`/api/recordings/${recordingId}`);
+    if (appState.liveDetailToken !== token) return;
+    const selection = window.getSelection();
+    if (selection?.toString() && $("#modal-body").contains(selection.anchorNode)) {
+      setTimeout(refresh, 5000);
+      return;
+    }
     const row = detail.recording;
+    const live = detail.live || {};
+    const labels = { recording: "录制中", completed: "录制完成", streaming: "持续转写中", done: "已完成", waiting: "等待处理", preview: "预览已更新", finalizing: "生成终版中", fallback: "转为录后处理", failed: "处理失败", disabled: "未启用" };
+    const scroll = $("#modal-body").scrollTop;
     $("#modal-title").textContent = row.program_title || "录制详情";
     $("#modal-body").innerHTML = `<div class="detail-stack">
       ${row.partial ? `<div class="notice warning">本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒。</div>` : ""}
       ${row.epg_time_suspect ? `<div class="notice warning">EPG 时间可能不准，建议加大录制缓冲。</div>` : ""}
       <dl class="definition-grid"><div><dt>频道</dt><dd>${esc(row.channel_id)}</dd></div><div><dt>状态</dt><dd>${badge(row.status)}</dd></div><div><dt>开始时间</dt><dd>${esc(formatDateTime(row.start_time))}</dd></div><div><dt>时长 / 大小</dt><dd>${esc(row.duration_sec || "—")} 秒 · ${esc(formatBytes(row.size_bytes))}</dd></div>${row.encode_status === "done" ? `<div><dt>压缩</dt><dd><span class="badge success">已压缩</span> ${esc(formatBytes(row.original_size_bytes))} → ${esc(formatBytes(row.encoded_size_bytes))}${row.encode_settings?.height ? ` · ${esc(row.encode_settings.height)}p` : ""}</dd></div>` : row.encode_status === "pending" || row.encode_status === "encoding" ? `<div><dt>压缩</dt><dd><span class="badge">${row.encode_status === "encoding" ? "转码中" : "等待转码"}</span></dd></div>` : row.encode_status === "failed" ? `<div><dt>压缩</dt><dd><span class="badge danger">转码失败</span>${row.encode_error ? `<small class="danger">${esc(shorten(row.encode_error, 80))}</small>` : ""}</dd></div>` : ""}</dl>
       <div class="button-row">${row.file_path ? `<button class="button" data-detail-play type="button">▶ 播放</button><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原文件</a>` : ""}</div>
-      ${summarySections(detail.summary, detail.transcript)}
+      ${live.epoch ? `<section class="detail-section"><h3>实时分析</h3><p>录制：${esc(labels[live.capture] || live.capture)} · 转写：${esc(labels[live.asr] || live.asr)} · 摘要：${esc(labels[live.summary] || live.summary)}</p><p>文字已处理至 ${Math.floor((live.through_seconds || 0) / 60)} 分 ${Math.floor((live.through_seconds || 0) % 60)} 秒 · 落后采集约 ${Math.round(live.lag_seconds || 0)} 秒 · 待处理 ${live.pending_chunks || 0} 段${live.estimated_catchup_seconds == null ? "" : ` · 预计处理当前积压约 ${Math.round(live.estimated_catchup_seconds)} 秒`}</p><p>正式文字已处理至 ${Math.floor((live.verified_through_seconds || 0) / 60)} 分 ${Math.floor((live.verified_through_seconds || 0) % 60)} 秒 · 正式通道待处理 ${live.verified_pending_chunks || 0} 段</p><p>运行设备：${esc(live.runtime?.device || "等待识别")}${live.runtime?.fallback_reason ? "（已降级）" : ""}</p>${live.state === "fallback" ? '<div class="notice">实时分析暂不可用，录像继续保存，录后自动补转写。</div>' : ""}${live.preview && !detail.summary ? `<h4>预览摘要 · 非终版</h4><p style="white-space:pre-wrap">${esc(live.preview.summary_text)}</p><small>更新于 ${esc(formatDateTime(live.updated_at))}；预览不推送。</small>` : ""}${live.text && !detail.transcript ? `<h4>实时文字 · 草稿</h4><small>短窗识别可能有错字，正式文字由长窗结果生成。</small><p style="white-space:pre-wrap">${esc(live.text)}</p>` : ""}</section>` : ""}
+      ${detail.summary || detail.transcript || !live.epoch ? summarySections(detail.summary, detail.transcript) : '<div class="notice">节目分析完成后将显示终版摘要。</div>'}
       <section class="detail-section"><h3>推送事件</h3>${detail.push_events?.length ? detail.push_events.map(item => `<p>${esc(item.provider)} · ${esc(item.status)} · ${esc(formatDateTime(item.updated_at))}</p>`).join("") : "<p>暂无推送事件</p>"}</section>
     </div>`;
     $("[data-detail-play]")?.addEventListener("click", () => openPlayer(recordingId, row.program_title));
-  } catch (error) { $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
+    $("#modal-body").scrollTop = scroll;
+  } catch (error) { if (appState.liveDetailToken === token) $("#modal-body").innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
+  if (appState.liveDetailToken === token) setTimeout(refresh, 5000);
+  };
+  await refresh();
 }
 
-function openPlayer(recordingId, title) {
+async function openPlayer(recordingId, title) {
+  try {
+    const detail = await api(`/api/recordings/${encodeURIComponent(recordingId)}`);
+    if (["queued", "recording"].includes(detail.recording.status)) {
+      return toast("录像仍在录制或收尾，完成后即可播放。");
+    }
+  } catch (error) { return toast(error.message, "error"); }
   openModal(`播放 · ${title || "录像"}`, `<div class="video-shell">
     <video id="recording-player" controls preload="metadata" playsinline></video>
     <div class="video-preparing" id="video-preparing"><span class="spinner"></span><strong>正在准备浏览器视频</strong><small>首次播放需要无损转封装，通常等待数秒。</small></div>
@@ -1362,7 +1388,7 @@ async function renderSystem() {
     api("/api/settings/recording").catch(() => null),
   ]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
-  const pipelineLabels = { asr: "语音转写", encoder: "录像压缩", llm: "节目摘要" };
+    const pipelineLabels = { asr: "录后转写", live_asr: "实时转写", encoder: "录像压缩", llm: "节目摘要" };
   const pipelineRows = Object.entries(status.pipeline || {}).map(([name, row]) => `<tr><td>${esc(pipelineLabels[name] || name)}</td><td>${row.pending}${row.retrying ? `（退避 ${row.retrying}）` : ""}</td><td>${row.active}</td><td>${row.blocked || 0}</td><td>${row.failed}</td><td><span class="badge ${row.stalled ? "danger" : "success"}">${row.draining ? "等待维护" : row.stalled ? "进度异常" : "正常"}</span></td><td>${esc(formatDateTime(row.last_success_at))}</td></tr>`).join("");
   const profileOptions = Object.values(buffer.profiles || {}).map(row => `<option value="${esc(row.key)}" ${row.key === buffer.profile ? "selected" : ""}>${esc(row.label)}（缓冲 ${row.buffer_duration}s · 同步 ${row.live_sync} 段）</option>`).join("");
   const pushEmail = push?.email || {};

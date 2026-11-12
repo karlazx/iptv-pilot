@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from pymongo import ReturnDocument
@@ -17,6 +19,14 @@ def run_once(database) -> None:
 
     if is_draining(database, "llm"):
         return
+    from iptv_pilot.llm.live import final_summary, preview_once
+
+    # Recover a crash between terminal publication and making the push job ready.
+    for saved in database.summaries.find({"ready_for_push": False}).limit(10):
+        if database.recordings.find_one({"_id": saved["recording_id"], "summary_state": "done",
+                                         "summary_generation": saved.get("generation")}):
+            database.summaries.update_one({"_id": saved["_id"], "generation": saved["generation"]},
+                                         {"$set": {"ready_for_push": True, "push_processed": False}})
     now = datetime.now(UTC)
     retry_ready = {
         "$or": [
@@ -29,24 +39,49 @@ def run_once(database) -> None:
         {
             "llm_enabled": {"$ne": False},
             "$or": [
-                {"status": "asr_done", **retry_ready},
-                {"status": "summarizing", "summary_started_at": {"$lte": stale_before}},
+                {"status": "asr_done", "summary_state": {"$nin": ["done", "failed", "finalizing"]}, **retry_ready},
+                {"status": {"$in": ["recording", "completed"]}, "asr_state": "done", "live_state": "done",
+                 "summary_state": {"$nin": ["done", "failed", "finalizing"]}, **retry_ready},
+                {"$and": [{"$or": [{"status": "summarizing"}, {"summary_state": "finalizing"}]}, {"$or": [
+                    {"summary_heartbeat_at": {"$lte": stale_before}},
+                    {"summary_heartbeat_at": None, "summary_started_at": {"$lte": stale_before}}]}]},
             ],
         },
-        {"$set": {"status": "summarizing", "summary_started_at": datetime.now(UTC)}},
+        {"$set": {"summary_state": "finalizing",
+                  "summary_started_at": now, "summary_heartbeat_at": now,
+                  "summary_claim": uuid.uuid4().hex}, "$inc": {"summary_generation": 1}},
         sort=[("start_time", 1)],
         return_document=ReturnDocument.AFTER,
     )
     if not recording:
+        if os.getenv("LIVE_ASR_ENABLED", "0") == "1":
+            preview_once(database, create_provider)
         return
+    condition = {"_id": recording["_id"], "summary_state": "finalizing", "summary_claim": recording["summary_claim"]}
+    database.recordings.update_one({**condition, "status": {"$ne": "recording"}},
+                                   {"$set": {"status": "summarizing"}})
+    stopped = threading.Event()
+
+    def heartbeat():
+        while not stopped.wait(20):
+            try:
+                database.recordings.update_one(condition, {"$set": {"summary_heartbeat_at": datetime.now(UTC)}})
+            except Exception:
+                logger.warning("summary heartbeat failed")
+
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
     try:
         transcript = database.transcripts.find_one({"recording_id": recording["_id"]})
         if not transcript:
             raise RuntimeError("transcript not found")
         if not transcript.get("full_text", "").strip():
             raise RuntimeError("transcript is empty")
-        maximum = int(os.getenv("LLM_MAX_INPUT_CHARS", "60000"))
-        summary = create_provider().summarize(transcript.get("full_text", "")[:maximum])
+        if transcript.get("live_epoch") and transcript["live_epoch"] != recording.get("live_epoch"):
+            raise RuntimeError("transcript belongs to a previous recording attempt")
+        summary = final_summary(database, recording, transcript, create_provider())
+        if not database.recordings.find_one(condition, {"_id": 1}):
+            return
         document = {
             "recording_id": recording["_id"],
             "transcript_id": transcript["_id"],
@@ -56,19 +91,28 @@ def run_once(database) -> None:
             **summary,
             "pushed": False,
             "push_enabled": recording.get("push_enabled", True),
-            "push_processed": False,
+            # Older push workers understand this flag, so rollback stays safe.
+            "push_processed": True,
             "llm_provider": os.getenv("LLM_PROVIDER", "mock"),
             "llm_model": os.getenv("LLM_MODEL", ""),
             "created_at": datetime.now(UTC),
+            "generation": recording["summary_generation"], "ready_for_push": False,
         }
         database.summaries.update_one(
-            {"recording_id": recording["_id"]}, {"$set": document}, upsert=True
+            {"recording_id": recording["_id"], "$or": [
+                {"generation": {"$lte": recording["summary_generation"]}}, {"generation": None}]},
+            {"$set": document}, upsert=True
         )
-        database.recordings.update_one(
-            {"_id": recording["_id"]},
-            {"$set": {"status": "summarized", "error": None, "next_summary_attempt_at": None,
-                      "summary_completed_at": datetime.now(UTC)}},
+        published = database.recordings.update_one(
+            condition,
+            [{"$set": {"status": {"$cond": [{"$eq": ["$status", "recording"]}, "recording", "summarized"]},
+                       "next_summary_attempt_at": None, "summary_error": None,
+                       "summary_state": "done", "summary_completed_at": datetime.now(UTC)}}],
         )
+        if not published.matched_count:
+            return
+        database.summaries.update_one({"recording_id": recording["_id"], "generation": recording["summary_generation"]},
+                                     {"$set": {"ready_for_push": True, "push_processed": False}})
         if recording.get("auto_bookmark"):
             saved_summary = database.summaries.find_one({"recording_id": recording["_id"]})
             database.bookmarks.update_one(
@@ -90,16 +134,21 @@ def run_once(database) -> None:
         maximum = int(os.getenv("LLM_MAX_RETRIES", "2"))
         update = {
             "summary_retry_count": retry_count,
-            "error": str(exc)[:2000],
-            "status": "asr_done" if retry_count <= maximum else "summary_failed",
+            "summary_error": str(exc)[:2000],
+            "summary_state": "waiting" if retry_count <= maximum else "failed",
+            "status": {"$cond": [{"$eq": ["$status", "recording"]}, "recording",
+                                  "asr_done" if retry_count <= maximum else "summary_failed"]},
         }
         if retry_count <= maximum:
             update["next_summary_attempt_at"] = datetime.now(UTC) + timedelta(seconds=30)
         database.recordings.update_one(
-            {"_id": recording["_id"]},
-            {"$set": update},
+            condition,
+            [{"$set": update}],
         )
         logger.exception("summary failed recording_id=%s retry=%s/%s", recording["_id"], retry_count, maximum)
+    finally:
+        stopped.set()
+        thread.join(timeout=2)
 
 
 def main() -> None:

@@ -91,6 +91,7 @@ def schedule_once(database) -> None:
                     "retry_count": 0,
                     "created_at": now,
                     "asr_enabled": subscription.get("asr_enabled", True),
+                    "live_asr_enabled": subscription.get("live_asr_enabled", True),
                     "asr_model": subscription.get("asr_model", "small"),
                     "llm_enabled": subscription.get("llm_enabled", True),
                     "push_enabled": subscription.get("push_enabled", True),

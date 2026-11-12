@@ -45,6 +45,7 @@ def claim_job(database):
         return None
     return database.recordings.find_one_and_update(
         {"asr_enabled": {"$ne": False}, "$and": [
+            {"live_state": {"$nin": ["streaming", "sealed", "done"]}},
             {"$or": [
                 {"asr_attempt_count": {"$lt": budget}}, {"asr_attempt_count": None},
             ]},
@@ -118,6 +119,12 @@ def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
                      "asr_progress_at": datetime.now(UTC)})
         del audio
         gc.collect()
+        if os.getenv("LIVE_ASR_ENABLED", "0") == "1":
+            from iptv_pilot.asr.live import run_once as live_once
+
+            for _ in range(2):
+                if not live_once(database):
+                    break
     return segments, " ".join(s["text"] for s in segments).strip()
 
 
@@ -155,7 +162,7 @@ def process_recording(database, recording: dict) -> None:
                 {"asr_attempt_count": {"$lte": recording["asr_attempt_count"]}},
                 {"asr_attempt_count": None}]}, {"$set": document}, upsert=True)
         transcript = database.transcripts.find_one({"recording_id": recording["_id"]})
-        owned_update(database, recording, {"status": "asr_done", "transcript_id": transcript["_id"],
+        owned_update(database, recording, {"status": "asr_done", "asr_state": "done", "transcript_id": transcript["_id"],
                      "error": None, "next_asr_attempt_at": None, "asr_completed_at": datetime.now(UTC)})
         database.asr_chunks.delete_many({"recording_id": recording["_id"]})
         logger.info("ASR complete recording_id=%s", recording["_id"])
@@ -166,6 +173,7 @@ def process_recording(database, recording: dict) -> None:
         database.recordings.update_one(owner(recording), {"$set": {
             "error": str(exc)[:2000], "asr_retry_count": recording["asr_attempt_count"],
             "status": "completed" if recording["asr_attempt_count"] < budget else "asr_failed",
+            "asr_state": "waiting" if recording["asr_attempt_count"] < budget else "failed",
             "next_asr_attempt_at": datetime.now(UTC) + timedelta(seconds=30),
         }})
         logger.exception("ASR failed recording_id=%s", recording["_id"])
@@ -175,6 +183,16 @@ def process_recording(database, recording: dict) -> None:
 
 
 def run_once(database) -> None:
+    if os.getenv("LIVE_ASR_ENABLED", "0") == "1":
+        from iptv_pilot.asr.live import run_once as live_once
+
+        # A bounded live burst then a cooperative historical job avoids starvation.
+        for _ in range(4):
+            if not live_once(database):
+                break
+    else:
+        database.recordings.update_many({"status": "completed", "live_state": {"$in": ["streaming", "sealed"]}},
+                                       {"$set": {"live_state": "fallback", "asr_state": "waiting"}})
     recording = claim_job(database)
     if recording:
         process_recording(database, recording)
@@ -185,7 +203,11 @@ def main() -> None:
     database = connect_database()
     database.asr_chunks.create_index("recording_id")
     database.asr_chunks.create_index("created_at", expireAfterSeconds=604800)
-    run_forever(lambda: run_once(database), float(os.getenv("ASR_POLL_SECONDS", "10")))
+    from iptv_pilot.asr.live import setup
+
+    setup(database)
+    interval = 1 if os.getenv("LIVE_ASR_ENABLED", "0") == "1" else float(os.getenv("ASR_POLL_SECONDS", "10"))
+    run_forever(lambda: run_once(database), interval)
 
 
 if __name__ == "__main__":

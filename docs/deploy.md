@@ -209,6 +209,9 @@ docker compose --profile maintenance run --rm cleanup-recordings
 
 ## 11. 升级流程
 
+优先使用[定向升级工具](runtime-optimization.md)仅更新受影响的服务，等待活动任务、
+保留回退镜像和 Compose 配置。实时分析的共享音频目录与旧 Compose 迁移见[实时分析部署](live-analysis.md#配置与升级)。
+
 项目为基础镜像和配套服务提供了固定的默认版本，避免 `latest` 在无人确认时引入不兼容改动。尤其是 iptv-api 3.x 包含配置变化，升级前应先阅读其发布说明并在独立环境验证。
 
 升级前：

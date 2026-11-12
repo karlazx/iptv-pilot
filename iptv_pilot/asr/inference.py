@@ -25,9 +25,15 @@ def restore_chunks(chunks, mapping, duration: float) -> list[dict]:
         end = duration if chunk.end_ts < 0 else min(float(chunk.end_ts), duration)
         # A segment may span two speech intervals separated by removed silence.
         # Map each endpoint independently, just like faster-whisper's segments.
-        segments.append({"start": mapping.get_original_time(start),
-                         "end": mapping.get_original_time(max(start, end)),
-                         "text": chunk.text.strip()})
+        if hasattr(chunk, "word"):
+            index = mapping.get_chunk_index((start+max(start, end))/2)
+            segments.append({"start": mapping.get_original_time(start, index),
+                             "end": mapping.get_original_time(max(start, end), index),
+                             "text": chunk.word, "word": True})
+        else:
+            segments.append({"start": mapping.get_original_time(start),
+                             "end": mapping.get_original_time(max(start, end)),
+                             "text": chunk.text.strip()})
     return segments
 
 
@@ -37,6 +43,7 @@ def configuration(model: str) -> tuple:
         ("ASR_COMPUTE_TYPE", "int8"), ("ASR_CPU_THREADS", "4"),
         ("ASR_OPENVINO_MODEL", ""), ("ASR_LANGUAGE", ""),
         ("ASR_GPU_COMPUTE_TYPE", "float16"),
+        ("LIVE_ASR_ENABLED", "0"),
     )))
 
 
@@ -47,6 +54,8 @@ class Session:
         self.engine = "faster_whisper"
         self.device = "cpu"
         self.fallback_reason = None
+        self.words = False
+        self.word_capability = os.getenv("LIVE_ASR_ENABLED", "0") == "1"
         backend = os.getenv("ASR_BACKEND", "auto")
         device = os.getenv("ASR_DEVICE", "auto").lower()
         if backend not in {"auto", "faster_whisper", "openvino"}:
@@ -114,9 +123,10 @@ class Session:
         if not devices:
             raise GpuUnavailable("openvino_gpu_unavailable")
         # Intel's runtime validates support, driver availability and model compilation.
-        self.model = openvino_genai.WhisperPipeline(
-            str(model), devices[0], CACHE_DIR=str(model / "compiled-cache"),
-        )
+        properties = {"CACHE_DIR": str(model / "compiled-cache")}
+        if self.word_capability:
+            properties["word_timestamps"] = True
+        self.model = openvino_genai.WhisperPipeline(str(model), devices[0], **properties)
         self.engine, self.device = "openvino", devices[0]
 
     def _release(self) -> None:
@@ -127,7 +137,8 @@ class Session:
         return {"engine": self.engine, "device": self.device,
                 "model": self.model_name, "fallback_reason": self.fallback_reason}
 
-    def transcribe(self, audio) -> list[dict]:
+    def transcribe(self, audio, words=False) -> list[dict]:
+        self.words = words
         try:
             return self._infer(audio)
         except Exception as exc:
@@ -144,8 +155,11 @@ class Session:
         language = os.getenv("ASR_LANGUAGE", "").strip() or None
         if self.engine == "faster_whisper":
             segments, _ = self.model.transcribe(
-                audio, language=language, vad_filter=True, beam_size=1,
+                audio, language=language, vad_filter=True, beam_size=1, word_timestamps=self.words,
             )
+            if self.words:
+                return [{"start": float(w.start), "end": float(w.end), "text": w.word, "word": True}
+                        for s in segments for w in (s.words or [])]
             return [{"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
                     for s in segments]
         # Use the same Silero VAD as faster-whisper and restore the original timeline.
@@ -161,9 +175,10 @@ class Session:
         if language:
             config.language = f"<|{language}|>"
         config.task, config.return_timestamps, config.num_beams = "transcribe", True, 1
+        config.word_timestamps = self.words
         result = self.model.generate(compact, config)
         duration = len(compact) / 16000
-        segments = restore_chunks(result.chunks, mapping, duration)
+        segments = restore_chunks((result.words or []) if self.words else result.chunks, mapping, duration)
         if not segments and any(t.strip() for t in result.texts):
             raise RuntimeError("GPU transcript has no segment timestamps")
         return segments

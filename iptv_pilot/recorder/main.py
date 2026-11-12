@@ -532,7 +532,7 @@ def process_recording(database, recording: dict) -> None:
     channel_dir.mkdir(parents=True, exist_ok=True)
     filename = (
         f"{safe_name(recording['program_title'])}_{recording['start_time']:%Y%m%d_%H%M}_"
-        f"{str(recording['_id'])[-8:]}.ts"
+        f"{str(recording['_id'])[-8:]}_{claim_id[:8]}.ts"
     )
     output_path = channel_dir / filename
     temporary_path = output_path.with_suffix(".part.ts")
@@ -549,9 +549,27 @@ def process_recording(database, recording: dict) -> None:
         {"_id": recording["_id"], "claim_id": claim_id},
         {"$set": {"capture_started_at": now}},
     )
+    temporary_path.unlink(missing_ok=True)
+    recording["capture_started_at"] = now
+    observer = None
+    if os.getenv("LIVE_ASR_ENABLED", "0") == "1" and recording.get("asr_enabled", True) and recording.get("live_asr_enabled", True) and recording.get("asr_state") != "done":
+        try:
+            from iptv_pilot.recorder.live_audio import LiveAudio
+
+            observer = LiveAudio(database, recording, temporary_path, _ffmpeg_executable())
+            observer.start()
+        except Exception:
+            logger.warning("live ASR setup unavailable; recording continues", exc_info=True)
+            observer = None
     try:
-        temporary_path.unlink(missing_ok=True)
         capture_method = capture_stream(source["url"], temporary_path, scheduled_end)
+        if observer:
+            try:
+                observer.finish(True)
+            except Exception:
+                logger.warning("live ASR seal failed; recording continues", exc_info=True)
+                database.recordings.update_one({"_id": recording["_id"], "claim_id": claim_id},
+                                               {"$set": {"live_state": "fallback"}})
         size = temporary_path.stat().st_size
         minimum = int(os.getenv("RECORDING_MIN_BYTES", "1048576"))
         if size < minimum:
@@ -561,9 +579,15 @@ def process_recording(database, recording: dict) -> None:
         temporary_path.replace(output_path)
         owned = database.recordings.update_one(
             {"_id": recording["_id"], "claim_id": claim_id},
-            {
+            [{
                 "$set": {
-                    "status": "completed",
+                    "status": {"$cond": [{"$eq": ["$asr_state", "done"]},
+                        {"$switch": {"branches": [
+                            {"case": {"$eq": ["$summary_state", "done"]}, "then": "summarized"},
+                            {"case": {"$eq": ["$summary_state", "failed"]}, "then": "summary_failed"},
+                            {"case": {"$eq": ["$summary_state", "finalizing"]}, "then": "summarizing"}],
+                            "default": "asr_done"}}, "completed"]},
+                    "capture_state": "completed",
                     "file_path": str(output_path),
                     "duration_sec": int(round(actual_duration)) if actual_duration else duration,
                     "size_bytes": size,
@@ -579,7 +603,7 @@ def process_recording(database, recording: dict) -> None:
                     "encode_retry_count": 0,
                     "next_encode_attempt_at": None,
                 }
-            },
+            }],
         )
         if owned.matched_count == 0:
             logger.warning(
@@ -589,6 +613,11 @@ def process_recording(database, recording: dict) -> None:
                 output_path,
             )
     except Exception:
+        if observer:
+            try:
+                observer.finish(False)
+            except Exception:
+                logger.warning("live ASR abort failed", exc_info=True)
         temporary_path.unlink(missing_ok=True)
         raise
 

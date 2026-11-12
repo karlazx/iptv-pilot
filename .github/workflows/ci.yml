@@ -63,3 +63,4 @@ jobs:
           COMPOSE_PROFILES=compact,ai,iptv-api docker compose config --quiet
           docker compose -f docker-compose.yml -f docker-compose.search.yml --profile search config --quiet
           docker compose -f docker-compose.yml -f docker-compose.asr-intel.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.asr-intel.yml -f docker-compose.live-analysis.yml config --quiet

@@ -1,0 +1,20 @@
+# Migration overlay for installations retaining a customized older base Compose.
+x-live-analysis: &live-analysis
+  LIVE_ASR_ENABLED: ${LIVE_ASR_ENABLED:-1}
+  LIVE_ASR_CHUNK_SECONDS: ${LIVE_ASR_CHUNK_SECONDS:-30}
+  ASR_CHUNK_SECONDS: ${ASR_CHUNK_SECONDS:-300}
+  LIVE_SUMMARY_INTERVAL_SECONDS: ${LIVE_SUMMARY_INTERVAL_SECONDS:-180}
+  LIVE_AUDIO_MIN_FREE_BYTES: ${LIVE_AUDIO_MIN_FREE_BYTES:-1073741824}
+services:
+  recorder:
+    environment: *live-analysis
+    volumes:
+      - ${LIVE_AUDIO_PATH:-/nas/iptv/live-audio}:/data/live-audio
+  asr:
+    environment: *live-analysis
+    volumes:
+      - ${LIVE_AUDIO_PATH:-/nas/iptv/live-audio}:/data/live-audio
+  background:
+    environment: *live-analysis
+  llm:
+    environment: *live-analysis

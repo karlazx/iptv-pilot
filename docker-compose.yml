@@ -3,6 +3,11 @@ name: iptv-pilot
 x-app-environment: &app-environment
   TZ: ${TZ:-Asia/Shanghai}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LIVE_ASR_ENABLED: ${LIVE_ASR_ENABLED:-1}
+  LIVE_ASR_CHUNK_SECONDS: ${LIVE_ASR_CHUNK_SECONDS:-30}
+  ASR_CHUNK_SECONDS: ${ASR_CHUNK_SECONDS:-300}
+  LIVE_SUMMARY_INTERVAL_SECONDS: ${LIVE_SUMMARY_INTERVAL_SECONDS:-180}
+  LIVE_AUDIO_MIN_FREE_BYTES: ${LIVE_AUDIO_MIN_FREE_BYTES:-1073741824}
   MONGODB_URI: ${MONGODB_URI:-mongodb://iptv_user:change-me-iptv@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0}
   MONGODB_DATABASE: ${MONGODB_DATABASE:-iptv_pilot}
   # Static ffmpeg builds (imageio-ffmpeg / johnvansickle) bundle their own glibc
@@ -272,6 +277,7 @@ services:
       RECORDING_MIN_DURATION_RATIO: ${RECORDING_MIN_DURATION_RATIO:-0.8}
       FFMPEG_BIN: ${FFMPEG_BIN:-auto}
     volumes:
+      - ${LIVE_AUDIO_PATH:-/nas/iptv/live-audio}:/data/live-audio
       - ${RECORDINGS_PATH:-/nas/iptv/recordings}:/data/recordings
       - ${M3U_DATA_PATH:-/nas/iptv/m3u}:/data/m3u:ro
     mem_limit: 2g
@@ -322,6 +328,7 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     volumes:
+      - ${LIVE_AUDIO_PATH:-/nas/iptv/live-audio}:/data/live-audio
       - ${RECORDINGS_PATH:-/nas/iptv/recordings}:/data/recordings:ro
       - ${MODELS_PATH:-/nas/iptv/models}:/root/.cache
     extra_hosts:
