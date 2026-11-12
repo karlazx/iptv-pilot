@@ -1362,6 +1362,8 @@ async function renderSystem() {
     api("/api/settings/recording").catch(() => null),
   ]);
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
+  const pipelineLabels = { asr: "语音转写", encoder: "录像压缩", llm: "节目摘要" };
+  const pipelineRows = Object.entries(status.pipeline || {}).map(([name, row]) => `<tr><td>${esc(pipelineLabels[name] || name)}</td><td>${row.pending}</td><td>${row.active}</td><td>${row.blocked || 0}</td><td>${row.failed}</td><td><span class="badge ${row.stalled ? "danger" : "success"}">${row.draining ? "等待维护" : row.stalled ? "进度异常" : "正常"}</span></td><td>${esc(formatDateTime(row.last_success_at))}</td></tr>`).join("");
   const profileOptions = Object.values(buffer.profiles || {}).map(row => `<option value="${esc(row.key)}" ${row.key === buffer.profile ? "selected" : ""}>${esc(row.label)}（缓冲 ${row.buffer_duration}s · 同步 ${row.live_sync} 段）</option>`).join("");
   const pushEmail = push?.email || {};
   const pushProviderOptions = [["none", "关闭"], ["email", "邮箱"]]
@@ -1371,6 +1373,7 @@ async function renderSystem() {
   $("#view").innerHTML = `
     ${pageIntro("配置直播缓冲、邮件推送和录制压缩，并查看推送审计。容器与磁盘明细未通过管理 API 暴露，避免把宿主权限交给网页。")}
     <div class="stats-grid"><article class="stat-card"><small>可播频道</small><strong>${esc(status.channels)}</strong></article><article class="stat-card"><small>EPG 节目</small><strong>${esc(status.epg_programs)}</strong></article><article class="stat-card"><small>启用订阅</small><strong>${esc(status.subscriptions)}</strong></article><article class="stat-card"><small>录制记录</small><strong>${esc(recordingTotal)}</strong></article></div>
+    <section class="panel"><div class="panel-header"><h2>处理队列</h2><span class="badge">刷新页面更新</span></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>阶段</th><th>待处理</th><th>处理中</th><th>等待上游</th><th>失败</th><th>状态</th><th>最近完成</th></tr></thead><tbody>${pipelineRows}</tbody></table></div></section>
     <div class="settings-layout">
       <div class="detail-stack">
         <section class="panel"><div class="panel-header"><h2>直播缓冲档位</h2><span class="badge">${esc(buffer.profile)}</span></div><div class="panel-body compact"><label class="field compact"><span>播放缓冲模式</span><select class="select" id="buffer-profile-select">${profileOptions}</select></label><p class="meta-row" style="margin-top:6px">低延迟≈低缓冲更实时、流畅≈大缓冲更稳定；切换后新打开的直播立即生效。</p></div></section>

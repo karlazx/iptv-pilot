@@ -16,9 +16,10 @@ IPTVPilot 是一个 Docker Compose 应用：一个 Web 进程、一组轮询 Wor
                     ├── 媒体缓存            │
                     └── 管理 API            │
                                             │
-scheduler ──► recorder ──► encoder ──► ASR ──► LLM ──► push
-     │            │           │
-     └── 订阅      └── TS 文件  └── 720p MP4
+scheduler ──► recorder ──► ASR ──► LLM ──► push
+                    │              │
+                    └──► encoder ◄─┘  （等待 ASR/摘要终态）
+订阅决定录制窗口；录制产出 TS，encoder 校验后发布 720p MP4。
 ```
 
 ## 服务与镜像
@@ -28,10 +29,13 @@ scheduler ──► recorder ──► encoder ──► ASR ──► LLM ─�
 | 镜像后缀 | 构建参数 | 用于 |
 | --- | --- | --- |
 | （无） | `INSTALL_AI_DEPS=0 INSTALL_FFMPEG=1` | 除下列两项外的所有服务 |
-| `-ai` | `INSTALL_AI_DEPS=1 INSTALL_FFMPEG=1` | `recorder`、`encoder`、`asr` |
+| `-ai` | `INSTALL_AI_DEPS=1 INSTALL_FFMPEG=1` | `asr` |
 | `-live-normalizer` | `INSTALL_SYSTEM_FFMPEG=1` | `live-normalizer`（`hardware-accel` profile） |
 
-`-ai` 变体额外包含 faster-whisper 与 PyAV；单独成镜像，是为了让基础镜像的拉取或重建不会悄悄移除这些依赖。
+基础媒体镜像包含 PyAV、NumPy 和 FFmpeg；`-ai` 在此基础上追加 faster-whisper。
+默认 compact profile 用 background 合并轻量后台任务；split profile 保留独立 worker。
+mongot/search-init 使用 search profile，iptv-api 使用 iptv-api profile，硬件规范化使用 hardware-accel profile。
+完整配置与定向升级见[运行优化指南](runtime-optimization.md)。
 
 ### 常驻服务
 
@@ -44,8 +48,8 @@ scheduler ──► recorder ──► encoder ──► ASR ──► LLM ─�
 | `stream-quality` | 基础 | 周期性探测每条线路的可用性与带宽，按策略决定是否切换 | 1 GB |
 | `epg-engine` | 基础 | 抓取并合并 `EPG_URLS` 中的 XMLTV 源，写入 `epg_programs` | 1 GB |
 | `scheduler` | 基础 | 把匹配的订阅与节目单转换成录制任务，按频道+开始时间去重 | 512 MB |
-| `recorder` | `-ai` | 并发录制，claim fencing + 心跳租约，失败回退到隔离 PyAV 进程 | 2 GB |
-| `encoder` | `-ai` | ASR/摘要完成后把 TS 转成 720p MP4，校验时长后删除原文件 | 2 GB |
+| `recorder` | 基础 | 并发录制，claim fencing + 心跳租约，失败回退到隔离 PyAV 进程 | 2 GB |
+| `encoder` | 基础 | ASR/摘要完成后把 TS 转成 720p MP4，校验时长后删除原文件 | 2 GB |
 | `asr` | `-ai` | 用 faster-whisper 转写录像，可生成向量 | 3 GB |
 | `llm` | 基础 | 调用 LLM 把转录转成结构化摘要 | 1 GB |
 | `push` | 基础 | 按数据库中的推送配置发送通知并记录投递事件 | 512 MB |

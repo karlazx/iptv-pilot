@@ -60,7 +60,7 @@ EMBEDDING_BACKEND=none
 LLM_PROVIDER=mock
 ```
 
-ASR 和 recorder 使用独立的 AI 镜像（构建参数固定为 `INSTALL_AI_DEPS=1`），因此拉取/更新基础应用镜像不会移除 faster-whisper 或 PyAV。默认使用本地镜像并设置 `pull_policy: never`：
+ASR 使用独立的 AI 镜像（`INSTALL_AI_DEPS=1`）；recorder、encoder 和 Web 使用包含 PyAV/FFmpeg 的媒体基础镜像。默认使用本地镜像并设置 AI `pull_policy: never`：
 
 ```dotenv
 IPTV_PILOT_AI_IMAGE=iptv-pilot-ai
@@ -70,8 +70,8 @@ IPTV_PILOT_AI_TAG=local
 首次启用或升级后构建 AI 镜像：
 
 ```bash
-docker compose build asr recorder
-docker compose up -d asr recorder
+docker compose build asr
+docker compose up -d asr
 ```
 
 需要配置 faster-whisper 时设置：
@@ -101,12 +101,13 @@ docker compose up -d
 docker compose ps
 ```
 
-启动顺序为 MongoDB、副本集初始化、MongoDB Search、搜索索引初始化，最后是应用 Worker。
+默认启动 MongoDB、副本集初始化和核心应用。后台任务由 background 承担；独立 worker 使用 split profile。
+MongoDB Search、第三方源订阅器、硬件规范化均按需启用。模式选择、迁移与定向升级见[运行优化指南](runtime-optimization.md)。
 
 查看启动日志：
 
 ```bash
-docker compose logs -f mongodb mongo-init mongot search-init web
+docker compose logs -f mongodb mongo-init background web
 ```
 
 验证 Web 服务和数据库：
@@ -185,7 +186,7 @@ RECORDING_ENCODE_KEEP_ORIGINAL=false
 RECORDING_ENCODE_CONCURRENCY=1
 ```
 
-首次启动会把历史已完成、且尚未标记 `encode_status` 的录像排队转码（`RECORDING_ENCODE_BACKLOG=true`），按现有 93 GB 估算可降到 15–20 GB。转码失败不会阻塞 ASR/摘要，原 TS 会保留。
+首次启动会把历史已完成、且尚未标记 `encode_status` 的录像排队转码（`RECORDING_ENCODE_BACKLOG=true`）。压缩比例取决于输入内容与画质设置。转码失败不会阻塞 ASR/摘要，原 TS 会保留。
 
 ## 10. 备份与清理
 

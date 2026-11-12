@@ -243,6 +243,10 @@ def requeue_claimed(database, recording: dict, claim_id: str, *, delay: int = 20
 
 
 def claim_recording(database, worker_id: str = WORKER_ID):
+    from iptv_pilot.common.runtime import is_draining
+
+    if is_draining(database, "recorder"):
+        return None
     now = datetime.now(UTC)
     stale_before = now - timedelta(seconds=lease_seconds() * 2)
     claim_id = _claim_id()
@@ -273,7 +277,7 @@ def claim_recording(database, worker_id: str = WORKER_ID):
                 },
                 {
                     "$or": [
-                        {"next_attempt_at": {"$exists": False}},
+                        {"next_attempt_at": None},
                         {"next_attempt_at": {"$lte": now}},
                     ]
                 },

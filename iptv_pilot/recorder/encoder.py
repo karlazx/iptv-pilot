@@ -151,6 +151,10 @@ def claim_job(database):
     ``file_path`` directly.  Recordings with ASR disabled are encoded as soon
     as the capture completes.
     """
+    from iptv_pilot.common.runtime import is_draining
+
+    if is_draining(database, "encoder"):
+        return None
     now = datetime.now(UTC)
     stale_before = now - timedelta(seconds=lease_seconds())
     claim_id = uuid.uuid4().hex
@@ -417,6 +421,15 @@ def heartbeat_loop(database, stop: threading.Event) -> None:
                 {"encode_status": "encoding", "encode_worker": WORKER_ID},
                 {"$set": {"encode_heartbeat_at": datetime.now(UTC)}},
             )
+            for recording in database.recordings.find(
+                {"encode_status": "encoding", "encode_worker": WORKER_ID}
+            ):
+                temporary = Path(recording["file_path"]).with_suffix(".encoding.mp4")
+                if temporary.is_file():
+                    database.recordings.update_one(
+                        {"_id": recording["_id"], "encode_claim_id": recording["encode_claim_id"]},
+                        {"$set": {"encode_progress_at": datetime.fromtimestamp(temporary.stat().st_mtime, UTC)}},
+                    )
         except Exception:
             logger.warning("encode heartbeat failed", exc_info=True)
 

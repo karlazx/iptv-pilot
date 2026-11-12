@@ -1,0 +1,5 @@
+# Add this file and --profile search to enable vector search.
+services:
+  mongodb:
+    volumes:
+      - ./config/mongod.conf:/etc/mongod.conf:ro

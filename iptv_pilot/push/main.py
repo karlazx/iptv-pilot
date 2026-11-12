@@ -34,13 +34,17 @@ def record_event(database, summary_id, provider: str, status: str, error: str | 
 
 
 def run_once(database) -> None:
+    from iptv_pilot.common.runtime import is_draining
+
+    if is_draining(database, "push"):
+        return
     now = datetime.now(UTC)
     summary = database.summaries.find_one(
         {
             "push_processed": {"$ne": True},
             "push_enabled": {"$ne": False},
             "$or": [
-                {"next_push_attempt_at": {"$exists": False}},
+                {"next_push_attempt_at": None},
                 {"next_push_attempt_at": {"$lte": now}},
             ],
         },
