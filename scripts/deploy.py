@@ -8,8 +8,10 @@ import shutil
 import subprocess
 import time
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+UTC = timezone.utc
 
 
 def command(args):

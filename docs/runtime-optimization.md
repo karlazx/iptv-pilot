@@ -46,6 +46,7 @@ docker compose -f docker-compose.yml -f docker-compose.search.yml --profile sear
 应用 worker 不再隐式注入整份 `.env`，修改部署标签不会改变无关容器的环境。
 
 脚本默认只展示计划：
+部署宿主机只需 Python 3.10+ 和 Docker CLI；应用本身仍在 Python 3.12 容器中运行。
 
 ```bash
 python -m scripts.deploy --project-dir . --api http://localhost:8080 \
