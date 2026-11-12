@@ -11,6 +11,9 @@ services:
         INSTALL_OPENVINO_DEPS: "1"
     environment:
       ASR_BACKEND: ${ASR_BACKEND:-auto}
+      ASR_DEVICE: ${ASR_DEVICE:-auto}
+      ASR_OPENVINO_MODEL: ${ASR_OPENVINO_MODEL:-}
+      ASR_GPU_COMPUTE_TYPE: ${ASR_GPU_COMPUTE_TYPE:-float16}
     volumes:
       - type: bind
         source: ${ASR_DRI_PATH:-/dev/dri}

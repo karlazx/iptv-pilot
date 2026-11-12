@@ -92,6 +92,7 @@ def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
                                     configuration(model))).encode()).hexdigest()
     deadline = time.monotonic() + max(60, int(os.getenv("ASR_JOB_TIMEOUT_SECONDS", "14400")))
     segments = []
+    runtimes = []
     for index, (offset, audio) in enumerate(audio_windows(str(path), seconds)):
         if time.monotonic() > deadline:
             raise TimeoutError("ASR job exceeded its time budget")
@@ -107,8 +108,12 @@ def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
                          for s in local], "created_at": datetime.now(UTC)}
             database.asr_chunks.update_one({"_id": chunk_id}, {"$setOnInsert": saved}, upsert=True)
         segments.extend(saved["segments"])
+        actual = saved.get("runtime", {})
+        if actual and actual not in runtimes:
+            runtimes.append(actual)
+        recording["asr_runtime"], recording["asr_runtimes"] = actual, runtimes
         owned_update(database, recording, {"asr_chunks_done": index + 1,
-                     "asr_runtime": saved.get("runtime", {}),
+                     "asr_runtime": actual, "asr_runtimes": runtimes,
                      "asr_audio_seconds": offset + len(audio) / 16000,
                      "asr_progress_at": datetime.now(UTC)})
         del audio
@@ -139,7 +144,8 @@ def process_recording(database, recording: dict) -> None:
                     "segments": segments, "full_text": full_text,
                     "embedding_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
                     "created_at": datetime.now(UTC), "asr_attempt_count": recording["asr_attempt_count"]}
-        document["asr_runtime"] = runtime_info()
+        document["asr_runtime"] = recording.get("asr_runtime", {})
+        document["asr_runtimes"] = recording.get("asr_runtimes", [])
         vector = embed_text(full_text)
         if vector:
             document["embedding"] = vector

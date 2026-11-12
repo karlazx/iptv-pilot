@@ -103,6 +103,7 @@ def test_retry_resumes_saved_chunks(database, audio_file, monkeypatch):
         return [{"start": 0, "end": 1, "text": "first"}]
 
     monkeypatch.setattr(asr, "transcribe_window", fail_second)
+    monkeypatch.setattr(asr, "runtime_info", lambda: {"engine": "openvino", "device": "GPU"})
     asr.process_recording(database, asr.claim_job(database))
     assert database.asr_chunks.count_documents({"recording_id": rid}) == 1
     database.recordings.update_one({"_id": rid}, {"$set": {"next_asr_attempt_at": None}})
@@ -113,11 +114,17 @@ def test_retry_resumes_saved_chunks(database, audio_file, monkeypatch):
         return [{"start": 0, "end": 1, "text": "rest"}]
 
     monkeypatch.setattr(asr, "transcribe_window", succeed)
+    monkeypatch.setattr(asr, "runtime_info", lambda: {"engine": "faster_whisper", "device": "cpu"})
     asr.process_recording(database, asr.claim_job(database))
     assert resumed == [480000, 80000]
     assert database.recordings.find_one({"_id": rid})["status"] == "asr_done"
     transcript = database.transcripts.find_one({"recording_id": rid})
     assert [s["start"] for s in transcript["segments"]] == [0, 30, 60]
+    assert transcript["asr_runtimes"] == [
+        {"engine": "openvino", "device": "GPU"},
+        {"engine": "faster_whisper", "device": "cpu"},
+    ]
+    assert transcript["asr_runtime"]["device"] == "cpu"
     assert database.asr_chunks.count_documents({"recording_id": rid}) == 0
 
 

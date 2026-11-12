@@ -81,7 +81,7 @@ def test_gpu_failure_then_cpu_failure_is_reported(monkeypatch):
         session.transcribe(object())
 
 
-def test_explicit_gpu_with_no_cuda_does_not_select_cpu_silently(monkeypatch):
+def test_auto_gpu_can_select_intel_without_cuda(monkeypatch):
     fake_cpu(monkeypatch)
     monkeypatch.setenv("ASR_DEVICE", "gpu")
     monkeypatch.setattr(inference.Session, "_cuda_available", lambda self: False)
