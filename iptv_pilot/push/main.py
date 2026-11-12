@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import uuid
 from datetime import UTC, datetime, timedelta
 
+from pymongo import ReturnDocument
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from iptv_pilot.common.db import configure_logging, connect_database, run_forever
@@ -39,19 +42,36 @@ def run_once(database) -> None:
     if is_draining(database, "push"):
         return
     now = datetime.now(UTC)
-    summary = database.summaries.find_one(
+    summary = database.summaries.find_one_and_update(
         {
             "push_processed": {"$ne": True},
+            "ready_for_push": {"$ne": False},
             "push_enabled": {"$ne": False},
-            "$or": [
-                {"next_push_attempt_at": None},
-                {"next_push_attempt_at": {"$lte": now}},
+            "$and": [
+                {"$or": [{"next_push_attempt_at": None}, {"next_push_attempt_at": {"$lte": now}}]},
+                {"$or": [{"push_lease_until": None}, {"push_lease_until": {"$lte": now}}]},
             ],
         },
+        {"$set": {"push_claim": uuid.uuid4().hex, "push_lease_until": now+timedelta(minutes=10)}},
         sort=[("created_at", 1)],
+        return_document=ReturnDocument.AFTER,
     )
     if not summary:
         return
+    owner = {"_id": summary["_id"], "push_claim": summary["push_claim"],
+             "generation": summary.get("generation")}
+    stopped = threading.Event()
+
+    def heartbeat():
+        while not stopped.wait(20):
+            try:
+                database.summaries.update_one(owner, {"$set": {
+                    "push_lease_until": datetime.now(UTC)+timedelta(minutes=10)}})
+            except Exception:
+                logger.warning("push heartbeat deferred")
+
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
     try:
         config = load_config(database)
         channels = config["channels"]
@@ -63,6 +83,14 @@ def run_once(database) -> None:
         email_mode = os.getenv("PUSH_EMAIL_MODE", "fallback").lower()
         coze_succeeded = False
         for provider in providers:
+            if not database.summaries.find_one(owner, {"_id": 1}):
+                return
+            if database.push_events.find_one({"summary_id": summary["_id"],
+                                               "provider": provider.name, "status": "delivered"}):
+                delivered.append(provider.name)
+                if provider.name == "coze":
+                    coze_succeeded = True
+                continue
             if provider.name == "email" and email_mode == "fallback" and coze_succeeded:
                 record_event(database, summary["_id"], "email", "skipped")
                 continue
@@ -82,10 +110,10 @@ def run_once(database) -> None:
                     str(provider_error)[:2000],
                 )
                 logger.exception("push provider failed provider=%s", provider.name)
-        if providers and not delivered:
+        if failures or (providers and not delivered):
             raise RuntimeError("; ".join(failures) or "no push provider delivered")
         database.summaries.update_one(
-            {"_id": summary["_id"]},
+            owner,
             {
                 "$set": {
                     "push_processed": True,
@@ -94,16 +122,15 @@ def run_once(database) -> None:
                     "push_channels": channels,
                     "push_error": "; ".join(failures)[:2000] if failures else None,
                     "next_push_attempt_at": None,
+                    "push_lease_until": None,
                 }
             },
         )
     except Exception as exc:
         retry_count = int(summary.get("push_retry_count", 0)) + 1
         maximum = int(os.getenv("PUSH_MAX_RETRIES", "3"))
-        for channel in load_config(database)["channels"]:
-            if channel != "coze_query":
-                record_event(database, summary["_id"], channel, "failed", str(exc)[:2000])
         update = {
+            "push_lease_until": None,
             "push_retry_count": retry_count,
             "push_error": str(exc)[:2000],
             "push_processed": retry_count > maximum,
@@ -111,9 +138,12 @@ def run_once(database) -> None:
         if retry_count <= maximum:
             update["next_push_attempt_at"] = datetime.now(UTC) + timedelta(seconds=60)
         database.summaries.update_one(
-            {"_id": summary["_id"]}, {"$set": update}
+            owner, {"$set": update}
         )
         logger.exception("push failed summary_id=%s retry=%s/%s", summary["_id"], retry_count, maximum)
+    finally:
+        stopped.set()
+        thread.join(timeout=2)
 
 
 def main() -> None:

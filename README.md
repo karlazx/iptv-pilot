@@ -61,6 +61,8 @@ docker compose ps
 
 ## 文档
 
+- [录制期间实时转写与增量摘要](docs/live-analysis.md)
+
 - [部署指南](docs/deploy.md)
 - [紧凑模式、任务恢复与定向升级](docs/runtime-optimization.md)
 - [ASR CPU/GPU 加速与自动回退](docs/asr-acceleration.md)

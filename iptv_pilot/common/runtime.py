@@ -7,7 +7,7 @@ ACTIVE_TASKS = {
     "recorder": ("recordings", {"status": "recording"}),
     "encoder": ("recordings", {"encode_status": "encoding"}),
     "asr": ("recordings", {"status": "asr_processing"}),
-    "llm": ("recordings", {"status": "summarizing"}),
+    "llm": ("recordings", {"$or": [{"status": "summarizing"}, {"summary_state": "finalizing"}]}),
 }
 
 
@@ -21,6 +21,8 @@ def maintenance_status(database) -> dict:
             for name, (collection, query) in ACTIVE_TASKS.items()}
     result["background"] = {"draining": is_draining(database, "background"),
                             "active": database.runtime_jobs.count_documents({"active": True})}
+    result["asr"]["active"] += database.live_chunks.count_documents({"state": "processing", "lease_until": {"$gt": datetime.now(UTC)}})
+    result["llm"]["active"] += database.recordings.count_documents({"live_summary_lease": {"$gt": datetime.now(UTC)}})
     for name in ("web", "push", "scheduler", "epg-engine", "stream-quality", "channel-sync"):
         result.setdefault(name, {"draining": is_draining(database, name),
                                  "active": database.runtime_jobs.count_documents({"_id": name, "active": True})})
@@ -41,8 +43,11 @@ def pipeline_status(database, now=None) -> dict:
             {"status": "completed", "asr_enabled": False}]},
             {"encode_status": "encoding"}, {"encode_status": "failed"},
             "encode_progress_at", "encode_started_at", "encoded_at", "next_encode_attempt_at"),
-        "llm": ({"status": "asr_done", "llm_enabled": {"$ne": False}},
-                {"status": "summarizing"}, {"status": "summary_failed"},
+        "llm": ({"llm_enabled": {"$ne": False}, "$or": [
+                    {"status": "asr_done", "summary_state": {"$nin": ["done", "finalizing", "failed"]}},
+                    {"status": "recording", "asr_state": "done", "summary_state": {"$nin": ["done", "finalizing", "failed"]}}]},
+                {"$or": [{"status": "summarizing"}, {"summary_state": "finalizing"}]},
+                {"$or": [{"status": "summary_failed"}, {"summary_state": "failed"}]},
                 "summary_started_at", "summary_started_at", "summary_completed_at", "next_summary_attempt_at"),
     }
     result = {}
@@ -68,4 +73,15 @@ def pipeline_status(database, now=None) -> dict:
                         "draining": is_draining(database, name)}
     ready = result["encoder"]["pending"]
     result["encoder"]["blocked"] = max(0, database.recordings.count_documents({"encode_status": "pending"})-ready)
+    live_waiting = database.live_chunks.count_documents({"state": "ready"})
+    live_active = database.live_chunks.count_documents({"state": "processing"})
+    samples = list(database.live_chunks.find({"state": "done"}, {"created_at": 1, "done_at": 1}).sort("done_at", -1).limit(100))
+    latencies = sorted((r["done_at"]-r["created_at"]).total_seconds() for r in samples if r.get("done_at") and r.get("created_at"))
+    oldest = database.live_chunks.find_one({"state": "ready"}, sort=[("created_at", 1)]) or {}
+    result["live_asr"] = {"pending": live_waiting, "active": live_active,
+                           "failed": database.live_chunks.count_documents({"state": "failed"}),
+                           "draining": is_draining(database, "asr"),
+                           "stalled": bool(oldest.get("created_at") and now-oldest["created_at"] > timedelta(seconds=90)) and not is_draining(database, "asr"),
+                           "last_success_at": samples[0].get("done_at") if samples else None,
+                           "p95_processing_lag_seconds": latencies[min(len(latencies)-1, int(len(latencies)*.95))] if latencies else None}
     return result

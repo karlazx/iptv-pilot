@@ -85,6 +85,10 @@ mongot/search-init 使用 search profile，iptv-api 使用 iptv-api profile，�
 
 ## 录像处理流水线
 
+启用实时分析后，recorder 旁路读取本地 TS，ASR 并行消费短窗草稿和长窗正式音频，
+LLM 在录制期间生成增量笔记；正式通道完成后汇总并推送。录制、转写、摘要有独立状态，
+详细的数据流、质量约束与恢复见[实时分析](live-analysis.md)。下图仍适用于关闭实时分析或失败回退的录后路径。
+
 ```text
 scheduler 生成 queued
         │

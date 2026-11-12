@@ -130,6 +130,7 @@ class SubscriptionCreate(BaseModel):
     channel_id: str | None = None
     time_rule: TimeRule | None = None
     asr_enabled: bool = True
+    live_asr_enabled: bool = True
     asr_model: Literal["tiny", "base", "small", "medium"] = "small"
     llm_enabled: bool = True
     push_enabled: bool = True
@@ -153,6 +154,7 @@ class SubscriptionUpdate(BaseModel):
     channel_id: str | None = None
     time_rule: TimeRule | None = None
     asr_enabled: bool | None = None
+    live_asr_enabled: bool | None = None
     asr_model: Literal["tiny", "base", "small", "medium"] | None = None
     llm_enabled: bool | None = None
     push_enabled: bool | None = None
@@ -166,6 +168,7 @@ class ManualRecordingCreate(BaseModel):
     duration_sec: int = Field(default=30, ge=10, le=600)
     program_title: str = Field(default="手工录制", min_length=1, max_length=100)
     asr_enabled: bool = True
+    live_asr_enabled: bool = True
     asr_model: Literal["tiny", "base", "small", "medium"] = "base"
     llm_enabled: bool = True
     push_enabled: bool = True
@@ -1287,6 +1290,7 @@ def create_manual_recording(payload: ManualRecordingCreate) -> dict:
         "status": "queued",
         "retry_count": 0,
         "asr_enabled": payload.asr_enabled,
+        "live_asr_enabled": payload.live_asr_enabled,
         "asr_model": payload.asr_model,
         "llm_enabled": payload.llm_enabled,
         "push_enabled": payload.push_enabled,
@@ -1315,12 +1319,15 @@ def recording_detail(recording_id: str) -> dict:
     events = []
     if summary:
         events = list(database.push_events.find({"summary_id": summary["_id"]}))
+    from iptv_pilot.common.live import view
+
     return serialize(
         {
             "recording": recording,
             "transcript": transcript,
             "summary": summary,
             "push_events": events,
+            "live": view(database, recording),
         }
     )
 

@@ -22,6 +22,7 @@ recordings/
 models/
 backup/
 media-cache/
+live-audio/
 m3u/
 db/
 db-search/
