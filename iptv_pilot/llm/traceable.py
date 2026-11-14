@@ -113,8 +113,23 @@ def final_summary(database, recording, transcript, provider):
             raise RuntimeError("evidence input exceeds budget; increase LLM_MAX_INPUT_CHARS")
         notes = [{**grounded(provider, sources(batch), batch), "source_ids": [s["id"] for s in sources(batch)]} for batch in batches]
     result = {k: v for k, v in notes[0].items() if k not in {"_id", "recording_id", "source_ids", "created_at"}}
+    result["chapters"] = topic_chapters(result, segments)
     result["transcript_revision"] = transcript.get("revision", 0)
     result["incomplete"] = bool(recording.get("partial"))
     if result["incomplete"]:
         result["summary_text"] = "【录制不完整，仅依据保留内容】"+result["summary_text"]
     return result
+
+
+def topic_chapters(summary, segments):
+    """Topic navigation anchors, never invented editorial boundary times."""
+    chapters, seen = [], set()
+    for evidence in sorted(summary.get("evidence", []), key=lambda e: e["start"]):
+        sid = evidence["segment_id"]
+        if sid in seen:
+            continue
+        seen.add(sid)
+        title = str(summary["key_points"][evidence["point_index"]])
+        chapters.append({"title": title[:80], **{k: evidence[k] for k in (
+            "segment_id", "start", "end", "part_id", "media_start", "media_end")}})
+    return chapters

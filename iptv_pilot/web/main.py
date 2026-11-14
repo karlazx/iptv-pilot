@@ -1360,7 +1360,7 @@ def regenerate_analysis(recording_id: str) -> dict:
 
 
 @app.get("/api/recordings/{recording_id}/transcript")
-def transcript_segments(recording_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100), focus: str | None = None) -> dict:
+def transcript_segments(recording_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100), focus: str | None = None, q: str = Query("", max_length=200)) -> dict:
     from iptv_pilot.llm.traceable import identify
 
     rid = object_id(recording_id)
@@ -1368,7 +1368,9 @@ def transcript_segments(recording_id: str, offset: int = Query(0, ge=0), limit: 
     transcript = database.transcripts.find_one({"recording_id": rid}, {"embedding": 0})
     if not row or not transcript:
         raise HTTPException(404, "转写尚未完成或不存在")
-    segments = identify(transcript.get("segments", []))
+    from iptv_pilot.common.transcript import search_segments
+
+    segments = search_segments(identify(transcript.get("segments", [])), q)
     if focus:
         index = next((i for i, s in enumerate(segments) if s["id"] == focus), None)
         if index is not None:
@@ -1376,6 +1378,27 @@ def transcript_segments(recording_id: str, offset: int = Query(0, ge=0), limit: 
     return serialize({"segments": segments[offset:offset+limit], "offset": offset, "total": len(segments),
                       "revision": transcript.get("revision", 0),
                       "editable": row.get("status") in {"asr_done", "summarized", "summary_failed"} and row.get("summary_state") != "finalizing"})
+
+
+@app.get("/api/recordings/{recording_id}/transcript/subtitles")
+def export_subtitles(recording_id: str, format: Literal["srt", "vtt"] = "srt", part_id: str | None = None):
+    from iptv_pilot.common.transcript import subtitles
+    from iptv_pilot.llm.traceable import identify
+
+    rid = object_id(recording_id)
+    transcript = database.transcripts.find_one({"recording_id": rid})
+    if not transcript:
+        raise HTTPException(404, "转写尚未完成或不存在")
+    segments = identify(transcript.get("segments", []))
+    if part_id and not any(s["part_id"] == part_id for s in segments):
+        raise HTTPException(404, "片段转写不存在")
+    try:
+        body = subtitles(segments, format, part_id)
+    except ValueError as exc:
+        raise HTTPException(409, "断流录像请按片段导出字幕，以保证时间同步") from exc
+    suffix = "-part" if part_id else ""
+    return Response(body, media_type="text/vtt" if format == "vtt" else "application/x-subrip",
+                    headers={"Content-Disposition": f'attachment; filename="{rid}{suffix}.{format}"'})
 
 
 @app.patch("/api/recordings/{recording_id}/transcript/segments/{segment_id}")

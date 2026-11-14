@@ -295,3 +295,54 @@ def test_correction_rejects_a_running_capture(database):
     database.transcripts.insert_one({"recording_id": r["_id"], "segments": [segment]})
     with pytest.raises(corrections.EditConflict):
         corrections.correct(database, r, segment["id"], "changed", 0)
+
+
+def test_transcript_search_is_literal_and_uses_corrected_text():
+    from iptv_pilot.common.transcript import search_segments
+
+    rows = [{"text": "News [update]"}, {"text": "人工校正后的新闻"}]
+    assert search_segments(rows, "[update]") == rows[:1]
+    assert search_segments(rows, "NEWS") == rows[:1]
+    assert search_segments(rows, "校正") == rows[1:]
+    assert search_segments(rows, "missing") == []
+
+
+def test_subtitles_use_local_part_time_and_keep_corrected_unicode_text():
+    from iptv_pilot.common.transcript import subtitles
+
+    segments = [{"part_id": "part", "start": 65.25, "end": 67,
+                 "media_start": 5.25, "media_end": 7, "text": "校正后的字幕 <示例>"}]
+    with pytest.raises(ValueError, match="select a recording part"):
+        subtitles(segments)
+    assert "00:00:05,250 --> 00:00:07,000" in subtitles(segments, "srt", "part")
+    assert "校正后的字幕" in subtitles(segments, "srt", "part")
+    vtt = subtitles(segments, "vtt", "part")
+    assert vtt.startswith("WEBVTT\n\n") and "00:00:05.250" in vtt and "&lt;示例&gt;" in vtt
+
+
+def test_topic_chapters_use_verified_evidence_timing():
+    summary = {"key_points": ["新闻话题"], "evidence": [
+        {"point_index": 0, "segment_id": "s", "part_id": "main", "start": 10,
+         "end": 12, "media_start": 10, "media_end": 12}]}
+    chapters = traceable.topic_chapters(summary, [])
+    assert chapters[0]["title"] == "新闻话题" and chapters[0]["start"] == 10
+
+
+def test_transcript_search_and_subtitle_api(database, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from iptv_pilot.web import main as web
+
+    monkeypatch.setattr(web, "database", database)
+    r = row(database)
+    segments = traceable.identify([{"start": 5, "end": 7, "text": "新闻原文"}])
+    database.transcripts.insert_one({"recording_id": r["_id"], "segments": segments, "revision": 2})
+    client = TestClient(web.app)
+    root = f"/api/recordings/{r['_id']}/transcript"
+    page = client.get(root, params={"q": "原文"}).json()
+    assert page["total"] == 1 and page["revision"] == 2
+    assert client.get(root, params={"q": "没有"}).json()["total"] == 0
+    response = client.get(root+"/subtitles?format=srt")
+    assert response.status_code == 200 and "00:00:05,000" in response.text
+    assert response.headers["content-disposition"].endswith('.srt"')
+    assert client.get(root+"/subtitles?format=invalid").status_code == 422

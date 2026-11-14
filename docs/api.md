@@ -113,3 +113,14 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 - Chrome/Edge 使用随应用本地部署的 hls.js，Safari 可使用其原生 HLS 能力；运行时不访问外部 CDN。
 - 节目单、频道明确的订阅和录制记录均可打开直播播放器；全频道关键词订阅因为没有唯一频道，不显示直播按钮。
 - 上游不可用返回 502，签名无效或过期返回 403；响应不暴露 MongoDB 或 NAS 文件路径。
+### 第二期原文检索与字幕
+
+`GET /api/recordings/{id}/transcript?q=关键词&offset=0&limit=50`：
+按当前修订原文字面匹配，返回段落 ID、媒体内时间、版本和匹配总数。
+
+`GET /api/recordings/{id}/transcript/subtitles?format=srt`：下载当前 SRT；
+`format=vtt` 下载 WebVTT。断流录像必须传 `part_id`，使用片段内时间；
+未指定片段时返回 409，未知片段返回 404。没有正式转写时返回 404。
+
+正式摘要的 `chapters` 提供话题导航标题和经过原文引用验证的媒体坐标。
+章节表示引用定位参考，不表示精确编辑切点。
