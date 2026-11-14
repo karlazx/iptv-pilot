@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from pymongo import MongoClient
+
+from iptv_pilot.common.media_refs import retire_files
 
 
 def main() -> None:
@@ -19,9 +20,12 @@ def main() -> None:
     for recording in database.recordings.find(query):
         if recording["_id"] in bookmarked_ids:
             continue
-        path = Path(recording.get("file_path", ""))
-        if path.is_file():
-            path.unlink()
+        if recording.get("asr_enabled", True) and recording.get("status") == "completed":
+            continue
+        paths = [recording.get(k) for k in ["file_path", "asr_source_path", "original_file_path"]]
+        paths.extend(p["path"] for p in recording.get("recording_parts", []))
+        if not retire_files(database, paths):
+            continue
         database.recordings.delete_one({"_id": recording["_id"]})
         removed += 1
     print(f"removed={removed}")

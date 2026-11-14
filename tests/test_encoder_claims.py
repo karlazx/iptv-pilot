@@ -69,12 +69,13 @@ def test_claim_prioritizes_recent_completed_recordings(database):
     assert claim_job(database) is None
 
 
-def test_claim_does_not_interrupt_transcription(database):
-    database.recordings.insert_one(
+def test_claim_can_encode_independently_of_transcription(database):
+    rid = database.recordings.insert_one(
         recording(status="completed", asr_enabled=True, next_encode_attempt_at=None)
-    )
+    ).inserted_id
 
-    assert claim_job(database) is None
+    assert claim_job(database)["_id"] == rid
+    assert database.recordings.find_one({"_id": rid})["status"] == "completed"
 
 
 def test_claim_recovers_stale_encoder_with_no_retry_delay(database):

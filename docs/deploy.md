@@ -178,7 +178,7 @@ docker compose run --rm --no-deps recorder python -m scripts.migrations.migrate_
 
 ### 录制压缩
 
-录制器始终以原画质 `-c copy` 保存 TS，保证源不稳定时也能完整录下来；`encoder` 服务在 ASR/摘要完成后把文件转成 720p MP4（H.264 CRF 26），校验时长通过才替换并删除原 TS。可在管理台「通用设置 → 录制压缩」或环境变量中调整：
+录制器以原画质 `-c copy` 保存 TS；`encoder` 在采集结束后独立转成 720p MP4（H.264 CRF 26），与 ASR/LLM 并行。时长校验通过后发布 MP4，原 TS 等待 ASR 完成且读取租约释放后清理；中断片段保留原件。可在管理台「通用设置 → 录制压缩」或环境变量中调整：
 
 ```dotenv
 RECORDING_ENCODE_ENABLED=true

@@ -18,7 +18,7 @@ IPTVPilot 是一个 Docker Compose 应用：一个 Web 进程、一组轮询 Wor
                                             │
 scheduler ──► recorder ──► ASR ──► LLM ──► push
                     │              │
-                    └──► encoder ◄─┘  （等待 ASR/摘要终态）
+                    └──► encoder      （采集结束后独立转码）
 订阅决定录制窗口；录制产出 TS，encoder 校验后发布 720p MP4。
 ```
 
@@ -50,7 +50,7 @@ mongot/search-init 使用 search profile，iptv-api 使用 iptv-api profile，�
 | `epg-engine` | 基础 | 抓取并合并 `EPG_URLS` 中的 XMLTV 源，写入 `epg_programs` | 1 GB |
 | `scheduler` | 基础 | 把匹配的订阅与节目单转换成录制任务，按频道+开始时间去重 | 512 MB |
 | `recorder` | 基础 | 并发录制，claim fencing + 心跳租约，失败回退到隔离 PyAV 进程 | 2 GB |
-| `encoder` | 基础 | ASR/摘要完成后把 TS 转成 720p MP4，校验时长后删除原文件 | 2 GB |
+| `encoder` | 基础 | 采集结束后独立转 MP4；原 TS 等 ASR 完成且读取租约释放后清理 | 2 GB |
 | `asr` | `-ai` | 用 faster-whisper 转写录像，可生成向量 | 3 GB |
 | `llm` | 基础 | 调用 LLM 把转录转成结构化摘要 | 1 GB |
 | `push` | 基础 | 按数据库中的推送配置发送通知并记录投递事件 | 512 MB |
@@ -97,14 +97,15 @@ recorder 认领（claim_id + 频道租约）
         │  写入 /data/recordings/<频道>/<节目>_<时间>_<id>.part.ts
         ▼
 completed ──► ASR ──► asr_done ──► LLM ──► summarized
-        │                                    │
-        └────────────► encoder ◄─────────────┘
+        │
+        └────────────► encoder
                           │
                           ▼
-                  720p MP4，删除原 TS
+                  720p MP4，原 TS 延后安全清理
 ```
 
-`encoder` 只在 ASR/摘要到达终态后领取任务，避免与转写争用同一文件。转码失败不会阻塞摘要，原 TS 会保留。
+`encoder` 与 ASR/LLM 并行；ASR 固定读取来源，媒体读取租约保护仍在使用的文件。
+原 TS 在 ASR 终态且没有读者后清理，转码失败保留原文件。摘要追溯、人工校正与断流成果保留见[第二期说明](analysis-phase2.md)。
 
 ## 数据模型
 
@@ -122,6 +123,12 @@ MongoDB 中每个集合的职责：
 | `bookmarks` | 收藏 |
 | `push_events` | 每个渠道的投递审计 |
 | `settings` | 管理台可改的配置（缓冲档位、推送、录制压缩） |
+| `live_chunks` / `live_notes` | 可恢复音频任务与分通道增量笔记 |
+| `media_readers` | 跨进程媒体读取租约与删除准入保护 |
+| `analysis_notes` | 按原文内容签名缓存的可追溯笔记 |
+| `transcript_edits` / `summary_versions` | 人工校正审计、可恢复意图与旧摘要版本 |
+| `push_delivery_history` | 按摘要版本记录的投递结果 |
+| `source_recording_events` | 近期实际录制结果与源稳定性依据 |
 
 `channels.m3u_url` 与 `stream_candidates` 是 `sources` 的派生镜像，供尚未迁移的旧逻辑读取；新代码只读写 `sources`。
 

@@ -21,12 +21,16 @@ def deliver(provider, summary: dict) -> bool:
     return provider.push_summary(summary)
 
 
-def record_event(database, summary_id, provider: str, status: str, error: str | None = None) -> None:
+def record_event(database, summary_id, provider: str, status: str, error: str | None = None, generation=0) -> None:
+    database.push_delivery_history.update_one({"summary_id": summary_id, "provider": provider, "generation": generation},
+        {"$set": {"status": status, "error": error, "updated_at": datetime.now(UTC)},
+         "$setOnInsert": {"created_at": datetime.now(UTC)}}, upsert=True)
     database.push_events.update_one(
         {"summary_id": summary_id, "provider": provider},
         {
             "$set": {
                 "status": status,
+                "generation": generation,
                 "error": error,
                 "updated_at": datetime.now(UTC),
             },
@@ -72,43 +76,55 @@ def run_once(database) -> None:
 
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
+
+    def event(provider, status, error=None):
+        record_event(database, summary["_id"], provider, status, error, summary.get("generation", 0))
+
+    def publishable():
+        current = database.summaries.find_one(owner)
+        if not current or current.get("ready_for_push") is False or current.get("outdated") or current.get("push_enabled") is False:
+            return False
+        row = database.recordings.find_one({"_id": summary.get("recording_id")})
+        return not row or (not (row.get("analysis_edit_lease") and row["analysis_edit_lease"] > datetime.now(UTC))
+                           and row.get("transcript_revision", 0) == summary.get("transcript_revision", 0))
+
     try:
+        if not publishable():
+            return
         config = load_config(database)
         channels = config["channels"]
         if "coze_query" in channels:
-            record_event(database, summary["_id"], "coze_query", "ready")
+            event("coze_query", "ready")
         delivered: list[str] = []
         failures: list[str] = []
         providers = create_providers(channels, config)
         email_mode = os.getenv("PUSH_EMAIL_MODE", "fallback").lower()
         coze_succeeded = False
         for provider in providers:
-            if not database.summaries.find_one(owner, {"_id": 1}):
+            if not publishable():
                 return
-            if database.push_events.find_one({"summary_id": summary["_id"],
-                                               "provider": provider.name, "status": "delivered"}):
+            generations = [{"generation": summary.get("generation", 0)}]
+            if summary.get("transcript_revision", 0) == 0:
+                generations.append({"generation": None})
+            if database.push_delivery_history.find_one({"summary_id": summary["_id"], "provider": provider.name,
+                    "generation": summary.get("generation", 0), "status": "delivered"}) or database.push_events.find_one({
+                    "summary_id": summary["_id"], "provider": provider.name, "status": "delivered", "$or": generations}):
                 delivered.append(provider.name)
                 if provider.name == "coze":
                     coze_succeeded = True
                 continue
             if provider.name == "email" and email_mode == "fallback" and coze_succeeded:
-                record_event(database, summary["_id"], "email", "skipped")
+                event("email", "skipped")
                 continue
             try:
                 if deliver(provider, summary):
                     delivered.append(provider.name)
-                    record_event(database, summary["_id"], provider.name, "delivered")
+                    event(provider.name, "delivered")
                     if provider.name == "coze":
                         coze_succeeded = True
             except Exception as provider_error:
                 failures.append(f"{provider.name}: {provider_error}")
-                record_event(
-                    database,
-                    summary["_id"],
-                    provider.name,
-                    "failed",
-                    str(provider_error)[:2000],
-                )
+                event(provider.name, "failed", str(provider_error)[:2000])
                 logger.exception("push provider failed provider=%s", provider.name)
         if failures or (providers and not delivered):
             raise RuntimeError("; ".join(failures) or "no push provider delivered")

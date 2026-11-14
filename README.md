@@ -62,6 +62,7 @@ docker compose ps
 ## 文档
 
 - [录制期间实时转写与增量摘要](docs/live-analysis.md)
+- [第二期：转码解耦、摘要追溯与断流保留](docs/analysis-phase2.md)
 
 - [部署指南](docs/deploy.md)
 - [紧凑模式、任务恢复与定向升级](docs/runtime-optimization.md)

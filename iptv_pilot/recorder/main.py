@@ -17,6 +17,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from iptv_pilot.common.db import configure_logging, connect_database
+from iptv_pilot.common.ffmpeg import ffmpeg_environment
 from iptv_pilot.recorder.encoding import load_settings as load_encode_settings
 
 logger = logging.getLogger(__name__)
@@ -399,7 +400,7 @@ def _capture_with_ffmpeg(source_url: str, output_path: Path, duration: int) -> N
         "copy",
         str(output_path),
     ]
-    subprocess.run(command, check=True, timeout=duration + 180)
+    subprocess.run(command, check=True, timeout=duration + 180, env=ffmpeg_environment(command[0]))
 
 
 def _capture_with_pyav(source_url: str, output_path: Path, duration: int) -> None:
@@ -414,13 +415,15 @@ def _capture_with_pyav(source_url: str, output_path: Path, duration: int) -> Non
     subprocess.run(command, check=True, timeout=duration + 180)
 
 
-def capture_stream(source_url: str, output_path: Path, scheduled_end: datetime) -> str:
+def capture_stream(source_url: str, output_path: Path, scheduled_end: datetime, on_partial=None) -> str:
     """Capture a live stream, falling back to isolated PyAV when ffmpeg crashes."""
     initial_duration = max(1, int((scheduled_end - datetime.now(UTC)).total_seconds()))
     try:
         _capture_with_ffmpeg(source_url, output_path, initial_duration)
         return "ffmpeg"
     except Exception as ffmpeg_error:
+        if on_partial:
+            on_partial(output_path, "ffmpeg")
         output_path.unlink(missing_ok=True)
         remaining = max(1, int((scheduled_end - datetime.now(UTC)).total_seconds()))
         if remaining <= 1:
@@ -526,6 +529,7 @@ def process_recording(database, recording: dict) -> None:
             {"source_id": source.get("source_id"), "source_url": source["url"], "source_kind": source.get("kind")}
         )
     now = datetime.now(UTC)
+    recording["timeline_origin"] = recording.get("timeline_origin") or now
     scheduled_end = recording.get("scheduled_end") or recording["end_time"]
     duration = max(1, int((scheduled_end - now).total_seconds()))
     channel_dir = RECORDING_ROOT / safe_name(recording["channel_id"])
@@ -547,12 +551,13 @@ def process_recording(database, recording: dict) -> None:
     )
     database.recordings.update_one(
         {"_id": recording["_id"], "claim_id": claim_id},
-        {"$set": {"capture_started_at": now}},
+        {"$set": {"capture_started_at": now, "timeline_origin": recording["timeline_origin"],
+                   "capture_temporary_path": str(temporary_path), "capture_output_path": str(output_path)}},
     )
     temporary_path.unlink(missing_ok=True)
     recording["capture_started_at"] = now
     observer = None
-    if os.getenv("LIVE_ASR_ENABLED", "0") == "1" and recording.get("asr_enabled", True) and recording.get("live_asr_enabled", True) and recording.get("asr_state") != "done":
+    if os.getenv("LIVE_ASR_ENABLED", "0") == "1" and recording.get("asr_enabled", True) and recording.get("live_asr_enabled", True) and recording.get("asr_state") != "done" and not recording.get("recording_parts"):
         try:
             from iptv_pilot.recorder.live_audio import LiveAudio
 
@@ -562,7 +567,21 @@ def process_recording(database, recording: dict) -> None:
             logger.warning("live ASR setup unavailable; recording continues", exc_info=True)
             observer = None
     try:
-        capture_method = capture_stream(source["url"], temporary_path, scheduled_end)
+        from iptv_pilot.recorder.partials import part_metadata, report_source, save_partial
+
+        attempt_start = [now]
+
+        def preserve(path, method):
+            if observer:
+                observer.finish(False)
+            save_partial(database, recording, path, attempt_start[0], method)
+            try:
+                report_source(database, recording, False)
+            except Exception:
+                logger.warning("source recording health update deferred")
+            attempt_start[0] = datetime.now(UTC)
+
+        capture_method = capture_stream(source["url"], temporary_path, scheduled_end, on_partial=preserve)
         if observer:
             try:
                 observer.finish(True)
@@ -574,9 +593,17 @@ def process_recording(database, recording: dict) -> None:
         minimum = int(os.getenv("RECORDING_MIN_BYTES", "1048576"))
         if size < minimum:
             raise RuntimeError(f"recording too small: {size} bytes")
-        actual_duration = _validate_captured_duration(temporary_path, duration)
-        epg_suspect = _epg_deviation_suspect(recording, temporary_path)
+        requested = max(1, int((scheduled_end-attempt_start[0]).total_seconds()))
+        actual_duration = _validate_captured_duration(temporary_path, requested)
+        epg_suspect = False if recording.get("recording_parts") else _epg_deviation_suspect(recording, temporary_path)
         temporary_path.replace(output_path)
+        latest = database.recordings.find_one({"_id": recording["_id"], "claim_id": claim_id}, {"recording_parts": 1})
+        if latest and latest.get("recording_parts"):
+            recording["recording_parts"] = latest["recording_parts"]
+        if recording.get("recording_parts"):
+            part = part_metadata(recording, output_path, attempt_start[0], actual_duration or duration, capture_method)
+            database.recordings.update_one({"_id": recording["_id"], "claim_id": claim_id},
+                                          {"$push": {"recording_parts": part}})
         owned = database.recordings.update_one(
             {"_id": recording["_id"], "claim_id": claim_id},
             [{
@@ -587,8 +614,9 @@ def process_recording(database, recording: dict) -> None:
                             {"case": {"$eq": ["$summary_state", "failed"]}, "then": "summary_failed"},
                             {"case": {"$eq": ["$summary_state", "finalizing"]}, "then": "summarizing"}],
                             "default": "asr_done"}}, "completed"]},
-                    "capture_state": "completed",
+                    "capture_state": "partial" if recording.get("recording_parts") else "completed",
                     "file_path": str(output_path),
+                    "asr_source_path": str(output_path),
                     "duration_sec": int(round(actual_duration)) if actual_duration else duration,
                     "size_bytes": size,
                     "capture_method": capture_method,
@@ -612,13 +640,23 @@ def process_recording(database, recording: dict) -> None:
                 claim_id,
                 output_path,
             )
+        else:
+            try:
+                report_source(database, recording, True, actual_duration or duration)
+            except Exception:
+                logger.warning("source recording health update deferred")
     except Exception:
         if observer:
             try:
                 observer.finish(False)
             except Exception:
                 logger.warning("live ASR abort failed", exc_info=True)
-        temporary_path.unlink(missing_ok=True)
+        try:
+            from iptv_pilot.recorder.partials import save_partial
+
+            save_partial(database, recording, temporary_path, attempt_start[0])
+        except Exception:
+            logger.warning("could not register partial recording; artifact retained", exc_info=True)
         raise
 
 
@@ -631,6 +669,13 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
     stitching together feeds that differ in delay or content.
     """
     claim_id = recording.get("claim_id")
+    try:
+        from iptv_pilot.recorder.partials import report_source
+
+        if not isinstance(error, OSError):
+            report_source(database, recording, False)
+    except Exception:
+        logger.warning("source recording health update deferred")
     retry_count = int(recording.get("retry_count", 0)) + 1
     maximum = int(os.getenv("RECORDING_MAX_RETRIES", "2"))
     update = {
@@ -733,6 +778,10 @@ def handle_failure(database, recording: dict, error: Exception) -> None:
             claim_id,
         )
         return
+    if update.get("status") == "failed" and recording.get("recording_parts"):
+        from iptv_pilot.recorder.partials import publish_partial
+
+        publish_partial(database, recording, error)
     logger.exception("recording failed id=%s retry=%s/%s", recording["_id"], retry_count, maximum)
 
 
@@ -769,6 +818,17 @@ def sweep_stale(database) -> None:
         }
     ):
         claim_id = recording.get("claim_id")
+        if recording.get("capture_temporary_path"):
+            try:
+                from iptv_pilot.recorder.partials import save_partial
+
+                artifact = Path(recording["capture_temporary_path"])
+                if not artifact.exists() and recording.get("capture_output_path"):
+                    artifact = Path(recording["capture_output_path"])
+                save_partial(database, recording, artifact,
+                             recording.get("capture_started_at") or now, "worker_lost")
+            except Exception:
+                logger.warning("stale capture artifact recovery deferred")
         scheduled_end = recording.get("scheduled_end") or recording.get("end_time")
         if scheduled_end and scheduled_end < now - timedelta(seconds=grace):
             database.recordings.update_one(
@@ -830,6 +890,10 @@ def sweep_stale(database) -> None:
         },
     )
     database.recorder_leases.delete_many({"claims": {"$size": 0}})
+    from iptv_pilot.recorder.partials import publish_partial
+
+    for recording in database.recordings.find({"status": "failed", "has_saved_parts": True}):
+        publish_partial(database, recording, recording.get("error", "capture interrupted"))
 
 
 def run_once(database) -> None:

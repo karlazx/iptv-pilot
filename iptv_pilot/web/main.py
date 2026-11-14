@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import uvicorn
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,7 @@ from pymongo import ReturnDocument
 from iptv_pilot import __version__
 from iptv_pilot.common.db import configure_logging, connect_database
 from iptv_pilot.common.live_paths import channel_cache_directory
+from iptv_pilot.common.media_refs import MediaBusy, MediaReader
 from iptv_pilot.push import settings as push_settings
 from iptv_pilot.push.providers import EmailProvider
 from iptv_pilot.recorder import encoding as recording_encoding
@@ -76,6 +77,9 @@ async def lifespan(_app: FastAPI):
     global database, live_http_client
     configure_logging()
     database = connect_database()
+    from iptv_pilot.llm.traceable import setup as setup_analysis
+
+    setup_analysis(database)
     live_http_client = httpx.AsyncClient(
         follow_redirects=True,
         timeout=httpx.Timeout(float(os.getenv("LIVE_PROXY_TIMEOUT_SECONDS", "20"))),
@@ -1145,20 +1149,20 @@ def epg_search(
 
 @app.get("/api/summaries/latest")
 def latest_summaries(limit: int = Query(10, ge=1, le=100)) -> list[dict]:
-    return serialize(list(database.summaries.find({"ready_for_push": {"$ne": False}}, {"embedding": 0}).sort("created_at", -1).limit(limit)))
+    return serialize(list(database.summaries.find({"ready_for_push": {"$ne": False}, "outdated": {"$ne": True}}, {"embedding": 0}).sort("created_at", -1).limit(limit)))
 
 
 @app.get("/api/summaries")
 def summaries(target_date: date = Query(alias="date")) -> list[dict]:
     start, end = local_day_window(target_date)
     return serialize(
-        list(database.summaries.find({"created_at": {"$gte": start, "$lt": end}, "ready_for_push": {"$ne": False}}, {"embedding": 0}))
+        list(database.summaries.find({"created_at": {"$gte": start, "$lt": end}, "ready_for_push": {"$ne": False}, "outdated": {"$ne": True}}, {"embedding": 0}))
     )
 
 
 @app.get("/api/summaries/{summary_id}")
 def summary_detail(summary_id: str) -> dict:
-    summary = database.summaries.find_one({"_id": object_id(summary_id), "ready_for_push": {"$ne": False}}, {"embedding": 0})
+    summary = database.summaries.find_one({"_id": object_id(summary_id), "ready_for_push": {"$ne": False}, "outdated": {"$ne": True}}, {"embedding": 0})
     if not summary:
         raise HTTPException(status_code=404, detail="节目摘要不存在")
     transcript = database.transcripts.find_one({"_id": summary.get("transcript_id")}, {"embedding": 0})
@@ -1167,7 +1171,7 @@ def summary_detail(summary_id: str) -> dict:
 
 @app.get("/api/search")
 def search(q: str = Query(min_length=1), vector: bool = False) -> dict:
-    summary_rows = list(database.summaries.find({"$text": {"$search": q}, "ready_for_push": {"$ne": False}}, {"embedding": 0}).limit(30))
+    summary_rows = list(database.summaries.find({"$text": {"$search": q}, "ready_for_push": {"$ne": False}, "outdated": {"$ne": True}}, {"embedding": 0}).limit(30))
     transcript_rows = list(
         database.transcripts.find(
             {"full_text": {"$regex": re.escape(q), "$options": "i"}},
@@ -1313,13 +1317,16 @@ def recording_detail(recording_id: str) -> dict:
     transcript = database.transcripts.find_one(
         {"recording_id": recording["_id"]}, {"embedding": 0, "segments": 0}
     )
+    if transcript:
+        transcript["has_parts"] = bool(recording.get("recording_parts"))
     summary = database.summaries.find_one(
-        {"recording_id": recording["_id"], "ready_for_push": {"$ne": False}}, {"embedding": 0}
+        {"recording_id": recording["_id"], "ready_for_push": {"$ne": False}, "outdated": {"$ne": True}}, {"embedding": 0}
     )
     events = []
     if summary:
         events = list(database.push_events.find({"summary_id": summary["_id"]}))
     from iptv_pilot.common.live import view
+    from iptv_pilot.recorder.partials import coverage
 
     return serialize(
         {
@@ -1328,8 +1335,135 @@ def recording_detail(recording_id: str) -> dict:
             "summary": summary,
             "push_events": events,
             "live": view(database, recording),
+            "coverage": coverage(recording) if recording.get("recording_parts") else None,
         }
     )
+
+
+class TranscriptCorrection(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    expected_revision: int = Field(ge=0)
+    notify: bool = False
+
+
+@app.post("/api/recordings/{recording_id}/analysis/regenerate")
+def regenerate_analysis(recording_id: str) -> dict:
+    from iptv_pilot.llm.corrections import EditConflict, regenerate
+
+    row = database.recordings.find_one({"_id": object_id(recording_id)})
+    if not row:
+        raise HTTPException(404, "录制任务不存在")
+    try:
+        return regenerate(database, row)
+    except EditConflict as exc:
+        raise HTTPException(409, "分析尚未完成，请稍后重试") from exc
+    except KeyError as exc:
+        raise HTTPException(404, "转写尚未完成") from exc
+
+
+@app.get("/api/recordings/{recording_id}/transcript")
+def transcript_segments(recording_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100), focus: str | None = None, q: str = Query("", max_length=200)) -> dict:
+    from iptv_pilot.llm.traceable import identify
+
+    rid = object_id(recording_id)
+    row = database.recordings.find_one({"_id": rid})
+    transcript = database.transcripts.find_one({"recording_id": rid}, {"embedding": 0})
+    if not row or not transcript:
+        raise HTTPException(404, "转写尚未完成或不存在")
+    from iptv_pilot.common.transcript import search_segments
+
+    segments = search_segments(identify(transcript.get("segments", [])), q)
+    if focus:
+        index = next((i for i, s in enumerate(segments) if s["id"] == focus), None)
+        if index is not None:
+            offset = (index//limit)*limit
+    return serialize({"segments": segments[offset:offset+limit], "offset": offset, "total": len(segments),
+                      "revision": transcript.get("revision", 0),
+                      "editable": row.get("status") in {"asr_done", "summarized", "summary_failed"} and row.get("summary_state") != "finalizing"})
+
+
+@app.get("/api/recordings/{recording_id}/transcript/subtitles")
+def export_subtitles(recording_id: str, format: Literal["srt", "vtt"] = "srt", part_id: str | None = None):
+    from iptv_pilot.common.transcript import subtitles
+    from iptv_pilot.llm.traceable import identify
+
+    rid = object_id(recording_id)
+    transcript = database.transcripts.find_one({"recording_id": rid})
+    if not transcript:
+        raise HTTPException(404, "转写尚未完成或不存在")
+    segments = identify(transcript.get("segments", []))
+    if part_id and not any(s["part_id"] == part_id for s in segments):
+        raise HTTPException(404, "片段转写不存在")
+    try:
+        body = subtitles(segments, format, part_id)
+    except ValueError as exc:
+        raise HTTPException(409, "断流录像请按片段导出字幕，以保证时间同步") from exc
+    suffix = "-part" if part_id else ""
+    return Response(body, media_type="text/vtt" if format == "vtt" else "application/x-subrip",
+                    headers={"Content-Disposition": f'attachment; filename="{rid}{suffix}.{format}"'})
+
+
+@app.patch("/api/recordings/{recording_id}/transcript/segments/{segment_id}")
+def correct_transcript(recording_id: str, segment_id: str, payload: TranscriptCorrection) -> dict:
+    from iptv_pilot.llm.corrections import EditConflict, correct
+
+    row = database.recordings.find_one({"_id": object_id(recording_id)})
+    if not row:
+        raise HTTPException(404, "录制任务不存在")
+    try:
+        return correct(database, row, segment_id, payload.text, payload.expected_revision, payload.notify)
+    except EditConflict as exc:
+        raise HTTPException(409, "文本版本或处理状态已变化，请刷新后重试") from exc
+    except KeyError as exc:
+        raise HTTPException(404, "转写段落不存在") from exc
+
+
+@app.get("/api/recordings/{recording_id}/transcript/edits")
+def transcript_edits(recording_id: str) -> list[dict]:
+    return serialize(list(database.transcript_edits.find({"recording_id": object_id(recording_id)},
+        {"old_summary": 0}).sort("created_at", -1).limit(50)))
+
+
+@app.get("/api/recordings/{recording_id}/partial-transcripts")
+def partial_transcripts(recording_id: str) -> list[dict]:
+    from iptv_pilot.common.live import merge_chunks, segments_text
+
+    rid = object_id(recording_id)
+    row = database.recordings.find_one({"_id": rid})
+    if not row:
+        raise HTTPException(404, "录制任务不存在")
+    result, seen = [], set()
+    for part in row.get("recording_parts", []):
+        epoch = part.get("epoch")
+        if not epoch or epoch in seen:
+            continue
+        seen.add(epoch)
+        chunks = list(database.live_chunks.find({"recording_id": rid, "epoch": epoch,
+            "lane": "draft", "state": "done"}, {"segments": 1}).sort("seq", 1))
+        text = segments_text(merge_chunks(chunks))
+        if text:
+            result.append({"part_id": part["id"], "offset": part["offset"], "text": text, "draft": True})
+    return result
+
+
+def sealed_part(recording_id, part_id):
+    row = database.recordings.find_one({"_id": object_id(recording_id)})
+    part = next((p for p in (row or {}).get("recording_parts", []) if p["id"] == part_id and p.get("sealed")), None)
+    if not part:
+        raise HTTPException(404, "已封口的录制片段不存在")
+    return {**row, "file_path": part["path"], "status": "completed"}, part
+
+
+@app.get("/api/recordings/{recording_id}/parts/{part_id}/play")
+def play_part(recording_id: str, part_id: str, background_tasks: BackgroundTasks):
+    row, part = sealed_part(recording_id, part_id)
+    return playable_response(recording_id+"-"+part_id, row, background_tasks)
+
+
+@app.get("/api/recordings/{recording_id}/parts/{part_id}/download")
+def download_part(recording_id: str, part_id: str, background_tasks: BackgroundTasks):
+    row, part = sealed_part(recording_id, part_id)
+    return download_response(recording_id+"-"+part_id, row, background_tasks)
 
 
 def media_recording(recording_id: str) -> dict:
@@ -1342,9 +1476,17 @@ def media_recording(recording_id: str) -> dict:
 
 
 @app.get("/api/recordings/{recording_id}/play", response_class=FileResponse)
-def play_recording(recording_id: str) -> FileResponse:
+def play_recording(recording_id: str, background_tasks: BackgroundTasks) -> FileResponse:
     recording = media_recording(recording_id)
+    return playable_response(recording_id, recording, background_tasks)
+
+
+def playable_response(recording_id, recording, background_tasks):
+    reader = None
     try:
+        source = resolve_recording_file(recording, Path(os.getenv("RECORDINGS_ROOT", "/data/recordings")))
+        reader = MediaReader(database, source)
+        reader.__enter__()
         asset = prepare_browser_media(
             recording_id,
             recording,
@@ -1354,23 +1496,44 @@ def play_recording(recording_id: str) -> FileResponse:
             timeout_seconds=int(os.getenv("MEDIA_REMUX_TIMEOUT_SECONDS", "300")),
         )
     except MediaNotFoundError as exc:
+        if reader:
+            reader.close()
         raise HTTPException(status_code=404, detail="录制媒体不可用") from exc
     except MediaPathError as exc:
+        if reader:
+            reader.close()
         raise HTTPException(status_code=404, detail="录制媒体不可用") from exc
     except MediaPreparationError as exc:
+        if reader:
+            reader.close()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except MediaBusy as exc:
+        raise HTTPException(409, "媒体文件已更新，请重新打开播放") from exc
+    except Exception:
+        if reader:
+            reader.close()
+        raise
+    if asset.path == source:
+        background_tasks.add_task(reader.close)
+    else:
+        reader.close()
     return FileResponse(
         asset.path,
         media_type=asset.media_type,
         filename=f"{recording_id}.mp4",
         content_disposition_type="inline",
         headers={"Cache-Control": "private, max-age=3600"},
+        background=background_tasks,
     )
 
 
 @app.get("/api/recordings/{recording_id}/download", response_class=FileResponse)
-def download_recording(recording_id: str) -> FileResponse:
+def download_recording(recording_id: str, background_tasks: BackgroundTasks) -> FileResponse:
     recording = media_recording(recording_id)
+    return download_response(recording_id, recording, background_tasks)
+
+
+def download_response(recording_id, recording, background_tasks):
     try:
         source = resolve_recording_file(
             recording, Path(os.getenv("RECORDINGS_ROOT", "/data/recordings"))
@@ -1378,11 +1541,18 @@ def download_recording(recording_id: str) -> FileResponse:
     except (MediaNotFoundError, MediaPathError) as exc:
         raise HTTPException(status_code=404, detail="录制媒体不可用") from exc
     suffix = source.suffix.lower() or ".bin"
+    reader = MediaReader(database, source)
+    try:
+        reader.__enter__()
+    except MediaBusy as exc:
+        raise HTTPException(409, "媒体文件已更新，请重新下载") from exc
+    background_tasks.add_task(reader.close)
     return FileResponse(
         source,
         media_type=download_media_type(source),
         filename=f"{recording_id}{suffix}",
         content_disposition_type="attachment",
+        background=background_tasks,
     )
 
 

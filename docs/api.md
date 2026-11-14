@@ -83,6 +83,22 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 
 ## 录像播放说明
 
+第二期增加以下接口，沿用现有 API 鉴权：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/recordings/{id}/transcript?offset=0&limit=100` | 分页原文段落、稳定 ID、媒体时间及当前修订版本；`focus` 可定位指定段落。 |
+| `PATCH /api/recordings/{id}/transcript/segments/{segment_id}` | 校正文字。参数为 `text`、`expected_revision`、`notify`（默认 false），成功后异步重新生成摘要；版本或任务状态冲突返回 409。 |
+| `POST /api/recordings/{id}/analysis/regenerate` | 按需生成可追溯摘要，默认不重新通知。 |
+| `GET /api/recordings/{id}/transcript/edits` | 最近的人工校正与重新生成记录。 |
+| `GET /api/recordings/{id}/partial-transcripts` | 中断前已完成的实时转写草稿。 |
+| `GET /api/recordings/{id}/parts/{part_id}/play` | 播放已封口的独立片段；尚在录制的其他片段不会暴露。 |
+| `GET /api/recordings/{id}/parts/{part_id}/download` | 下载已封口片段，读取期间保留文件。 |
+
+录制详情增加 `coverage`，包含片段和估算缺失区间。正式摘要的 `evidence` 为逐要点的
+原文摘录及服务端计算时间；`media_start` 用于当前片段内跳转，`start` 用于整场采集时间轴展示。
+旧摘要没有依据时可按需重新生成，服务不会自动批量回补历史摘要。
+
 - 录制目录以只读方式挂载到 Web 容器，播放不会改写原始 `.ts` 文件。
 - 首次播放按文件大小和修改时间生成独立 MP4 缓存；H.264 视频直接复制，MP2 等浏览器不兼容音频转为 AAC。
 - 后续请求复用缓存。`MEDIA_CACHE_MAX_BYTES` 默认 20 GiB，按最近使用时间清理旧缓存。
@@ -97,3 +113,14 @@ Base URL：`http://YOUR_NAS_IP:${WEB_PORT}`。OpenAPI：`GET /docs`，健康检�
 - Chrome/Edge 使用随应用本地部署的 hls.js，Safari 可使用其原生 HLS 能力；运行时不访问外部 CDN。
 - 节目单、频道明确的订阅和录制记录均可打开直播播放器；全频道关键词订阅因为没有唯一频道，不显示直播按钮。
 - 上游不可用返回 502，签名无效或过期返回 403；响应不暴露 MongoDB 或 NAS 文件路径。
+### 第二期原文检索与字幕
+
+`GET /api/recordings/{id}/transcript?q=关键词&offset=0&limit=50`：
+按当前修订原文字面匹配，返回段落 ID、媒体内时间、版本和匹配总数。
+
+`GET /api/recordings/{id}/transcript/subtitles?format=srt`：下载当前 SRT；
+`format=vtt` 下载 WebVTT。断流录像必须传 `part_id`，使用片段内时间；
+未指定片段时返回 409，未知片段返回 404。没有正式转写时返回 404。
+
+正式摘要的 `chapters` 提供话题导航标题和经过原文引用验证的媒体坐标。
+章节表示引用定位参考，不表示精确编辑切点。

@@ -9,6 +9,7 @@ from pymongo import ReturnDocument
 
 from iptv_pilot.common.live import merge_chunks, programme_bounds, programme_segments, segments_text
 from iptv_pilot.common.runtime import is_draining
+from iptv_pilot.llm.traceable import cached_note
 
 
 def reduce_text(provider, text, maximum=None):
@@ -52,14 +53,15 @@ def make_notes(database, row, provider, final=False, lane="draft"):
         if duration < target and not final:
             break
         text = segments_text(programme_segments(row, merge_chunks(group)))
-        summary = reduce_text(provider, text) if text.strip() else {
+        summary = (cached_note(database, row, programme_segments(row, merge_chunks(group)), provider)
+                   if lane == "verified" else reduce_text(provider, text)) if text.strip() else {
             "summary_text": "该时段未检测到可转写语音。", "key_points": [], "entities": [], "follow_up": ""}
         note = {"_id": f"{row['_id']}:{row['live_epoch']}:{lane}:{group[0]['seq']}",
                 "recording_id": row["_id"], "epoch": row["live_epoch"],
                 "lane": lane,
                 "first": group[0]["seq"], "last": group[-1]["seq"],
                 "start": group[0]["offset"], "end": group[-1]["offset"]+group[-1]["duration"],
-                **summary, "created_at": datetime.now(UTC)}
+                **{k: v for k, v in summary.items() if k not in {"_id", "recording_id", "created_at"}}, "created_at": datetime.now(UTC)}
         database.live_notes.update_one({"_id": note["_id"]}, {"$setOnInsert": note}, upsert=True)
         previous.append(note)
         pending = pending[len(group):]
@@ -109,11 +111,6 @@ def preview_once(database, provider_factory):
 
 
 def final_summary(database, recording, transcript, provider):
-    if transcript.get("live_epoch") and transcript["live_epoch"] == recording.get("live_epoch"):
-        notes = make_notes(database, recording, provider, final=True, lane="verified")
-        if notes:
-            text = "\n".join(f"[{n['start']:.0f}-{n['end']:.0f}s] " +
-                             json.dumps({k: n[k] for k in ("summary_text", "key_points", "entities")},
-                                        ensure_ascii=False) for n in notes)
-            return reduce_text(provider, text)
-    return reduce_text(provider, transcript["full_text"])
+    from iptv_pilot.llm.traceable import final_summary as traceable_summary
+
+    return traceable_summary(database, recording, transcript, provider)

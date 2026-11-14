@@ -21,6 +21,7 @@ from iptv_pilot.common.live import (
     segments_text,
 )
 from iptv_pilot.common.runtime import is_draining
+from iptv_pilot.llm.traceable import identify
 
 LOG = logging.getLogger(__name__)
 AUDIO_ROOT = Path("/data/live-audio")
@@ -91,7 +92,7 @@ def finalize(database):
             rows = prefix
         elif row["live_state"] != "sealed" or len(rows) != row.get("live_verified_count") or any(r["state"] != "done" for r in rows):
             continue
-        segments = programme_segments(row, merge_chunks(rows))
+        segments = identify(programme_segments(row, merge_chunks(rows)))
         text = segments_text(segments)
         condition = {"_id": row["_id"], "status": row["status"], "live_epoch": row["live_epoch"],
                      "live_state": row["live_state"]}
