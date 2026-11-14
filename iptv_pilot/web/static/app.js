@@ -660,10 +660,11 @@ async function openPlayer(recordingId, title, startSeconds = 0, partId = null) {
       return toast("录像仍在录制或收尾，完成后即可播放。");
     }
   } catch (error) { return toast(error.message, "error"); }
+  const mediaBase = `/api/recordings/${encodeURIComponent(recordingId)}${partId ? `/parts/${encodeURIComponent(partId)}` : ""}`;
   openModal(`播放 · ${title || "录像"}`, `<div class="video-shell">
     <video id="recording-player" controls preload="metadata" playsinline></video>
     <div class="video-preparing" id="video-preparing"><span class="spinner"></span><strong>正在准备浏览器视频</strong><small>首次播放需要无损转封装，通常等待数秒。</small></div>
-  </div><div class="playback-toolbar"><button class="button small secondary" id="seek-back" type="button">−10 秒</button><label class="speed-control"><span>播放速度</span><select class="select" id="playback-rate"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><button class="button small secondary" id="seek-forward" type="button">+10 秒</button><span class="playback-time" id="playback-time">00:00 / --:--</span></div><div class="modal-actions"><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原始录像</a><button class="button secondary" data-close-modal type="button">关闭</button></div>`, true);
+  </div><div class="playback-toolbar"><button class="button small secondary" id="seek-back" type="button">−10 秒</button><label class="speed-control"><span>播放速度</span><select class="select" id="playback-rate"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><button class="button small secondary" id="seek-forward" type="button">+10 秒</button><span class="playback-time" id="playback-time">00:00 / --:--</span></div><div class="modal-actions"><a class="button secondary" href="${mediaBase}/download">${partId ? "下载此片段" : "下载原始录像"}</a><button class="button secondary" data-close-modal type="button">关闭</button></div>`, true);
   const video = $("#recording-player");
   const preparing = $("#video-preparing");
   video.addEventListener("loadedmetadata", () => {
@@ -689,7 +690,7 @@ async function openPlayer(recordingId, title, startSeconds = 0, partId = null) {
     video.currentTime = Math.min(Number.isFinite(video.duration) ? video.duration : video.currentTime + 10, video.currentTime + 10);
   });
   $("#playback-rate").addEventListener("change", event => { video.playbackRate = Number(event.currentTarget.value); });
-  video.src = partId ? `/api/recordings/${encodeURIComponent(recordingId)}/parts/${encodeURIComponent(partId)}/play` : `/api/recordings/${encodeURIComponent(recordingId)}/play`;
+  video.src = `${mediaBase}/play`;
   video.load();
 }
 
