@@ -1317,6 +1317,8 @@ def recording_detail(recording_id: str) -> dict:
     transcript = database.transcripts.find_one(
         {"recording_id": recording["_id"]}, {"embedding": 0, "segments": 0}
     )
+    if transcript:
+        transcript["has_parts"] = bool(recording.get("recording_parts"))
     summary = database.summaries.find_one(
         {"recording_id": recording["_id"], "ready_for_push": {"$ne": False}, "outdated": {"$ne": True}}, {"embedding": 0}
     )
