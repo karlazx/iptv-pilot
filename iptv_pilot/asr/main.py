@@ -16,7 +16,9 @@ from iptv_pilot.asr.audio import audio_windows
 from iptv_pilot.asr.inference import configuration, get_session, runtime_info
 from iptv_pilot.common.db import configure_logging, connect_database, run_forever
 from iptv_pilot.common.embedding import embed_text
+from iptv_pilot.common.media_refs import MediaReader
 from iptv_pilot.common.runtime import is_draining
+from iptv_pilot.llm.traceable import identify
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,22 @@ def transcribe_window(audio, model_name: str) -> list[dict]:
 
 
 def transcribe_recording(database, recording: dict) -> tuple[list[dict], str]:
+    parts = recording.get("recording_parts") or [{"id": "main", "path": recording.get("asr_source_path") or recording["file_path"], "offset": 0}]
+    segments = []
+    for part in sorted(parts, key=lambda p: p["offset"]):
+        snapshot = {**recording, "file_path": part["path"]}
+        with MediaReader(database, part["path"]):
+            local, _ = _transcribe_file(database, snapshot)
+        for segment in local:
+            segments.append({**segment, "start": segment["start"]+part["offset"],
+                             "end": segment["end"]+part["offset"], "part_id": part["id"],
+                             "media_start": segment["start"], "media_end": segment["end"]})
+        recording["asr_runtime"] = snapshot.get("asr_runtime", {})
+        recording["asr_runtimes"] = snapshot.get("asr_runtimes", [])
+    return segments, " ".join(s["text"] for s in segments).strip()
+
+
+def _transcribe_file(database, recording: dict) -> tuple[list[dict], str]:
     backend = os.getenv("ASR_BACKEND", "mock")
     if backend == "mock":
         text = f"ASR mock transcript for {os.path.basename(recording['file_path'])}"
@@ -146,6 +164,7 @@ def process_recording(database, recording: dict) -> None:
         segments, full_text = transcribe_recording(database, recording)
         if not full_text:
             raise RuntimeError("ASR produced an empty transcript")
+        segments = identify(segments)
         document = {"recording_id": recording["_id"], "channel_id": recording["channel_id"],
                     "program_title": recording["program_title"], "start_time": recording["start_time"],
                     "segments": segments, "full_text": full_text,

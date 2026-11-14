@@ -1,9 +1,8 @@
 """Transcode completed recordings to a smaller browser-playable MP4.
 
-The recorder always captures an unmodified MPEG-TS so an unstable upstream can
-be recorded safely.  This worker then optionally rewrites it to H.264/AAC MP4
-at a capped resolution before ASR runs, so transcription reads a smaller file
-and the original TS can be deleted straight away.
+The recorder captures MPEG-TS and this worker can publish H.264/AAC MP4 while
+ASR continues reading its immutable source. Original retirement waits for ASR
+to finish and for cross-process reader leases to drain.
 
 Claiming uses the same fencing pattern as the recorder: a ``claim_id`` guards
 every terminal update, and a stale ``encode_heartbeat_at`` lets another worker
@@ -28,6 +27,8 @@ from pathlib import Path
 from pymongo import ReturnDocument
 
 from iptv_pilot.common.db import configure_logging, connect_database
+from iptv_pilot.common.ffmpeg import ffmpeg_environment
+from iptv_pilot.common.media_refs import MediaReader, reap_originals
 from iptv_pilot.recorder.encoding import load_settings
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ def probe_duration(path: Path) -> float | None:
             capture_output=True,
             text=True,
             timeout=60,
+            env=ffmpeg_environment(_ffmpeg_executable()),
         )
     except Exception:
         logger.warning("encode duration probe failed path=%s", path, exc_info=True)
@@ -144,13 +146,7 @@ def probe_duration(path: Path) -> float | None:
 
 
 def claim_job(database):
-    """Claim a recording whose ASR/summary pipeline has finished.
-
-    Encoding deliberately waits for the pipeline to reach a terminal state so
-    it can never swap the file out from under the ASR worker, which reads
-    ``file_path`` directly.  Recordings with ASR disabled are encoded as soon
-    as the capture completes.
-    """
+    """Claim sealed recordings independently of the ASR/summary pipeline."""
     from iptv_pilot.common.runtime import is_draining
 
     if is_draining(database, "encoder"):
@@ -161,11 +157,7 @@ def claim_job(database):
     job = database.recordings.find_one_and_update(
         {
             "file_path": {"$exists": True},
-            "$or": [
-                {"status": {"$in": ["summarized", "asr_failed", "summary_failed"]}},
-                {"status": "asr_done", "llm_enabled": False},
-                {"status": "completed", "asr_enabled": False},
-            ],
+            "status": {"$in": ["completed", "asr_processing", "asr_done", "summarizing", "summarized", "asr_failed", "summary_failed"]},
             "$and": [
                 {
                     "$or": [
@@ -235,6 +227,18 @@ def _fail(database, recording: dict, claim_id: str | None, error: str) -> None:
 
 
 def encode_recording(database, recording: dict, settings: dict) -> None:
+    source = recording["file_path"]
+    if Path(source).suffix.lower() not in {".mp4", ".m4v"}:
+        database.recordings.update_one({"_id": recording["_id"], "encode_claim_id": recording.get("encode_claim_id")},
+            [{"$set": {"asr_source_path": {"$ifNull": ["$asr_source_path", source]},
+                       "original_file_path": {"$ifNull": ["$original_file_path", source]},
+                       "keep_original": bool(settings.get("keep_original") or recording.get("recording_parts"))}}])
+    with MediaReader(database, source):
+        _encode_recording(database, recording, settings)
+    reap_originals(database)
+
+
+def _encode_recording(database, recording: dict, settings: dict) -> None:
     claim_id = recording.get("encode_claim_id")
     source = Path(recording["file_path"])
     if not source.is_file():
@@ -279,6 +283,7 @@ def encode_recording(database, recording: dict, settings: dict) -> None:
             encode_command(source, temporary, settings),
             check=True,
             timeout=max(600, int(expected or recording.get("duration_sec") or 0) * 30),
+            env=ffmpeg_environment(_ffmpeg_executable()),
         )
     except Exception as exc:
         temporary.unlink(missing_ok=True)
@@ -331,8 +336,7 @@ def encode_recording(database, recording: dict, settings: dict) -> None:
         output.unlink(missing_ok=True)
         logger.warning("encode claim lost id=%s claim=%s", recording["_id"], claim_id)
         return
-    if not settings.get("keep_original"):
-        source.unlink(missing_ok=True)
+    # Deferred retirement is guarded by reader leases and ASR's terminal state.
     logger.info(
         "encoding finished id=%s original_bytes=%s encoded_bytes=%s seconds=%s",
         recording["_id"],
@@ -353,11 +357,7 @@ def requeue_pending(database) -> int:
         {
             "encode_status": {"$exists": False},
             "file_path": {"$exists": True},
-            "$or": [
-                {"status": {"$in": ["summarized", "asr_failed", "summary_failed"]}},
-                {"status": "asr_done", "llm_enabled": False},
-                {"status": "completed", "asr_enabled": False},
-            ],
+            "status": {"$in": ["completed", "asr_processing", "asr_done", "summarizing", "summarized", "asr_failed", "summary_failed"]},
         },
         {"$set": {"encode_status": "pending"}},
     )
@@ -435,6 +435,7 @@ def heartbeat_loop(database, stop: threading.Event) -> None:
 
 
 def run_once(database) -> bool:
+    reap_originals(database)
     settings = load_settings(database)
     if not settings.get("enabled"):
         return False
@@ -464,6 +465,7 @@ def main() -> None:
         futures = set()
         while not stop.is_set():
             try:
+                reap_originals(database)
                 futures = {future for future in futures if not future.done()}
                 settings = load_settings(database)
                 if not settings.get("enabled"):

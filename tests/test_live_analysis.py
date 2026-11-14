@@ -272,7 +272,7 @@ def test_final_reuses_already_persisted_incremental_notes(database, monkeypatch)
     live.finalize(database)
     monkeypatch.setattr(llm, "create_provider", Provider)
     llm.run_once(database)
-    assert len(calls) == 4  # draft + verified cached minute + verified tail + final
+    assert len(calls) == 3  # draft + verified prefix + single canonical final group
 
 
 def test_final_owner_loss_cannot_publish_or_push(database, monkeypatch):

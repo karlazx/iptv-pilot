@@ -9,6 +9,7 @@ import wave
 from datetime import UTC, datetime
 from pathlib import Path
 
+from iptv_pilot.common.ffmpeg import ffmpeg_environment
 from iptv_pilot.common.live import programme_bounds
 
 LOG = logging.getLogger(__name__)
@@ -179,7 +180,7 @@ class LiveAudio:
                        "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "16000",
                        "-f", "s16le", "pipe:1"]
             self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                            stderr=subprocess.DEVNULL)
+                                            stderr=subprocess.DEVNULL, env=ffmpeg_environment(command[0]))
             feeder = threading.Thread(target=self.feed, daemon=True)
             feeder.start()
             segmenter = ContextSegmenter(seconds)

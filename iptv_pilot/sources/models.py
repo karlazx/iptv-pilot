@@ -198,5 +198,7 @@ def source_public(row: dict) -> dict:
         "last_error": row.get("last_error"),
         "last_fail_at": row.get("last_fail_at"),
         "fail_count": row.get("fail_count", 0),
+        "recording_health": row.get("recording_health"),
+        "recording_failures_total": row.get("recording_failures_total", 0),
         "created_at": row.get("created_at"),
     }

@@ -135,7 +135,8 @@ def test_queue_health_distinguishes_blocked_encoding_from_a_stall(database):
            asr_started_at=datetime.now(UTC) - timedelta(hours=1))
     status = pipeline_status(database)
     assert status["asr"]["stalled"] is True
-    assert status["encoder"]["blocked"] == 1
+    assert status["encoder"]["blocked"] == 0
+    assert status["encoder"]["pending"] == 1
     assert status["encoder"]["stalled"] is False
 
 

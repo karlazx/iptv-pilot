@@ -541,11 +541,75 @@ function openManualRecording(channels) {
   });
 }
 
+function analysisClock(value) {
+  const n = Math.max(0, Math.floor(Number(value) || 0));
+  return [Math.floor(n / 3600), Math.floor(n % 3600 / 60), n % 60].map(v => String(v).padStart(2, '0')).join(':');
+}
+
+async function openTranscriptEditor(recordingId, focus = null, offset = 0) {
+  openModal('转写时间轴与人工校正', '<div class="page-loading">加载原文…</div>', true);
+  const token = Symbol('transcript-editor');
+  appState.liveDetailToken = token;
+  try {
+    const query = new URLSearchParams({ offset, limit: 50 });
+    if (focus) query.set('focus', focus);
+    const page = await api(`/api/recordings/${encodeURIComponent(recordingId)}/transcript?${query}`);
+    if (appState.liveDetailToken !== token) return;
+    $('#modal-body').innerHTML = `<div class="detail-stack"><p>文本版本 ${page.revision} · 共 ${page.total} 段。校正后只重算受影响的分段笔记，再汇总正式摘要；录像保持原样。</p>${!page.editable ? '<div class="notice">录制或分析尚未完成，当前可查看原文，完成后可校正。</div>' : ''}${page.segments.map(s => `<section class="detail-section"><h4>${analysisClock(s.start)}–${analysisClock(s.end)} ${s.edited_at ? '· 已人工校正' : ''}</h4><div class="button-row"><button class="button small secondary" data-evidence-play="${esc(recordingId)}" data-part-id="${esc(s.part_id === 'main' ? '' : s.part_id || '')}" data-start="${Number(s.media_start ?? s.start) || 0}">▶ 回看此段</button></div><form data-segment-form="${esc(s.id)}"><label class="field"><span>转写文字</span><textarea class="input" name="text" rows="3" maxlength="4000" required ${page.editable ? '' : 'readonly'}>${esc(s.text)}</textarea></label>${s.original_text ? `<details><summary>识别原文</summary><p>${esc(s.original_text)}</p></details>` : ''}${page.editable ? '<label class="check"><input type="checkbox" name="notify">完成后重新推送（默认关闭）</label><button class="button small" type="submit">保存并重新生成受影响摘要</button>' : ''}</form></section>`).join('')}<div class="button-row"><button class="button secondary" data-transcript-prev ${page.offset === 0 ? 'disabled' : ''}>上一页</button><button class="button secondary" data-transcript-next ${page.offset + page.segments.length >= page.total ? 'disabled' : ''}>下一页</button><button class="button secondary" data-transcript-history>修订记录</button></div><div data-edit-history></div></div>`;
+    $('[data-transcript-prev]').onclick = () => openTranscriptEditor(recordingId, null, Math.max(0, page.offset - 50));
+    $('[data-transcript-next]').onclick = () => openTranscriptEditor(recordingId, null, page.offset + 50);
+    $('[data-transcript-history]').onclick = async () => {
+      try {
+        const rows = await api(`/api/recordings/${encodeURIComponent(recordingId)}/transcript/edits`);
+        if (appState.liveDetailToken !== token) return;
+        $('[data-edit-history]').innerHTML = rows.map(e => `<p>${esc(formatDateTime(e.created_at))} · ${e.kind === 'regenerate' ? '重新生成摘要' : `文字版本 ${e.from_revision} → ${e.to_revision}`} · ${esc(e.state)}${e.after ? `<br>${esc(e.before)} → ${esc(e.after)}` : ''}</p>`).join('') || '<p>暂无修订记录。</p>';
+      } catch (error) { toast(error.message, 'error'); }
+    };
+    document.querySelectorAll('[data-segment-form]').forEach(form => form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const data = new FormData(form), button = form.querySelector('button[type=submit]');
+      button.disabled = true;
+      try {
+        const result = await api(`/api/recordings/${encodeURIComponent(recordingId)}/transcript/segments/${encodeURIComponent(form.dataset.segmentForm)}`, { method: 'PATCH', body: { text: data.get('text'), expected_revision: page.revision, notify: data.has('notify') } });
+        toast(result.changed ? '校正已保存，正在重新生成摘要。' : '文字没有变化。');
+        if (appState.liveDetailToken === token) {
+          if (result.changed) openRecordingDetail(recordingId);
+          else button.disabled = false;
+        }
+      } catch (error) { if (appState.liveDetailToken === token) button.disabled = false; toast(error.message, 'error'); }
+    }));
+  } catch (error) { if (appState.liveDetailToken === token) $('#modal-body').innerHTML = `<div class="error-panel">${esc(error.message)}</div>`; }
+}
+
+document.addEventListener('click', async event => {
+  const play = event.target.closest('[data-evidence-play]');
+  if (play) return openPlayer(play.dataset.evidencePlay, '原文对应录像', Number(play.dataset.start), play.dataset.partId || null);
+  const archived = event.target.closest('[data-partial-transcripts]');
+  if (archived) {
+    try {
+      const rows = await api(`/api/recordings/${encodeURIComponent(archived.dataset.partialTranscripts)}/partial-transcripts`);
+      openModal('中断前保留的转写草稿', rows.map(r => `<section class="detail-section"><h3>${analysisClock(r.offset)} 起</h3><p style="white-space:pre-wrap">${esc(r.text)}</p></section>`).join('') || '<p>中断前尚无已完成的实时转写；保留片段会在采集结束后统一补转写。</p>', true);
+    } catch (error) { toast(error.message, 'error'); }
+    return;
+  }
+  const edit = event.target.closest('[data-evidence-edit]');
+  if (edit) return openTranscriptEditor(edit.dataset.evidenceEdit, edit.dataset.segmentId || null);
+  const regenerate = event.target.closest('[data-analysis-regenerate]');
+  if (regenerate) {
+    regenerate.disabled = true;
+    try {
+      await api(`/api/recordings/${encodeURIComponent(regenerate.dataset.analysisRegenerate)}/analysis/regenerate`, { method: 'POST' });
+      toast('正在生成可追溯摘要，不会自动重新推送。');
+      openRecordingDetail(regenerate.dataset.analysisRegenerate);
+    } catch (error) { regenerate.disabled = false; toast(error.message, 'error'); }
+  }
+});
+
 function summarySections(summary, transcript) {
   if (!summary && !transcript) return '<div class="notice">当前还没有转写或摘要。</div>';
   return `<div class="detail-stack">
     ${summary ? `<section class="detail-section"><h3>内容摘要</h3><p>${esc(summary.summary_text)}</p></section>
-      <section class="detail-section"><h3>核心要点</h3><ol class="key-points">${(summary.key_points || []).map(point => `<li>${esc(point)}</li>`).join("") || "<li>暂无</li>"}</ol></section>
+      <section class="detail-section"><h3>核心要点与原文依据</h3><ol class="key-points">${(summary.key_points || []).map((point, index) => `<li><p>${esc(point)}</p>${(summary.evidence || []).filter(e => e.point_index === index).map(e => `<blockquote><p>${esc(e.quote)}</p><button class="button small secondary" data-evidence-play="${esc(summary.recording_id)}" data-part-id="${esc(e.part_id === 'main' ? '' : e.part_id || '')}" data-start="${Number(e.media_start ?? e.start) || 0}">▶ ${analysisClock(e.start)}–${analysisClock(e.end)}</button> <button class="button small secondary" data-evidence-edit="${esc(summary.recording_id)}" data-segment-id="${esc(e.segment_id)}">查看 / 校正原文</button></blockquote>`).join("") || '<small>未定位到可核对的原文，不提供推测时间点。</small>'}</li>`).join("") || "<li>暂无</li>"}</ol></section>
       <section class="detail-section"><h3>实体与跟进</h3><div class="tag-list">${(summary.entities || []).map(entity => `<span class="tag">${esc(typeof entity === "string" ? entity : JSON.stringify(entity))}</span>`).join("") || '<span class="tag">暂无实体</span>'}</div>${summary.follow_up ? `<p style="margin-top:12px">${esc(summary.follow_up)}</p>` : ""}</section>` : ""}
     ${transcript ? `<section class="detail-section"><h3>转写全文</h3><p>${esc(transcript.full_text || "暂无转写文本")}</p></section>` : ""}
   </div>`;
@@ -571,12 +635,14 @@ async function openRecordingDetail(recordingId) {
     const scroll = $("#modal-body").scrollTop;
     $("#modal-title").textContent = row.program_title || "录制详情";
     $("#modal-body").innerHTML = `<div class="detail-stack">
-      ${row.partial ? `<div class="notice warning">本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒。</div>` : ""}
+      ${row.partial ? `<div class="notice warning">${row.recording_parts?.length ? '本次录制出现中断，已保留可用片段，摘要仅覆盖保留内容。' : `本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒。`}</div>` : ""}
       ${row.epg_time_suspect ? `<div class="notice warning">EPG 时间可能不准，建议加大录制缓冲。</div>` : ""}
       <dl class="definition-grid"><div><dt>频道</dt><dd>${esc(row.channel_id)}</dd></div><div><dt>状态</dt><dd>${badge(row.status)}</dd></div><div><dt>开始时间</dt><dd>${esc(formatDateTime(row.start_time))}</dd></div><div><dt>时长 / 大小</dt><dd>${esc(row.duration_sec || "—")} 秒 · ${esc(formatBytes(row.size_bytes))}</dd></div>${row.encode_status === "done" ? `<div><dt>压缩</dt><dd><span class="badge success">已压缩</span> ${esc(formatBytes(row.original_size_bytes))} → ${esc(formatBytes(row.encoded_size_bytes))}${row.encode_settings?.height ? ` · ${esc(row.encode_settings.height)}p` : ""}</dd></div>` : row.encode_status === "pending" || row.encode_status === "encoding" ? `<div><dt>压缩</dt><dd><span class="badge">${row.encode_status === "encoding" ? "转码中" : "等待转码"}</span></dd></div>` : row.encode_status === "failed" ? `<div><dt>压缩</dt><dd><span class="badge danger">转码失败</span>${row.encode_error ? `<small class="danger">${esc(shorten(row.encode_error, 80))}</small>` : ""}</dd></div>` : ""}</dl>
       <div class="button-row">${row.file_path ? `<button class="button" data-detail-play type="button">▶ 播放</button><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原文件</a>` : ""}</div>
       ${live.epoch ? `<section class="detail-section"><h3>实时分析</h3><p>录制：${esc(labels[live.capture] || live.capture)} · 转写：${esc(labels[live.asr] || live.asr)} · 摘要：${esc(labels[live.summary] || live.summary)}</p><p>文字已处理至 ${Math.floor((live.through_seconds || 0) / 60)} 分 ${Math.floor((live.through_seconds || 0) % 60)} 秒 · 落后采集约 ${Math.round(live.lag_seconds || 0)} 秒 · 待处理 ${live.pending_chunks || 0} 段${live.estimated_catchup_seconds == null ? "" : ` · 预计处理当前积压约 ${Math.round(live.estimated_catchup_seconds)} 秒`}</p><p>正式文字已处理至 ${Math.floor((live.verified_through_seconds || 0) / 60)} 分 ${Math.floor((live.verified_through_seconds || 0) % 60)} 秒 · 正式通道待处理 ${live.verified_pending_chunks || 0} 段</p><p>运行设备：${esc(live.runtime?.device || "等待识别")}${live.runtime?.fallback_reason ? "（已降级）" : ""}</p>${live.state === "fallback" ? '<div class="notice">实时分析暂不可用，录像继续保存，录后自动补转写。</div>' : ""}${live.preview && !detail.summary ? `<h4>预览摘要 · 非终版</h4><p style="white-space:pre-wrap">${esc(live.preview.summary_text)}</p><small>更新于 ${esc(formatDateTime(live.updated_at))}；预览不推送。</small>` : ""}${live.text && !detail.transcript ? `<h4>实时文字 · 草稿</h4><small>短窗识别可能有错字，正式文字由长窗结果生成。</small><p style="white-space:pre-wrap">${esc(live.text)}</p>` : ""}</section>` : ""}
       ${detail.summary || detail.transcript || !live.epoch ? summarySections(detail.summary, detail.transcript) : '<div class="notice">节目分析完成后将显示终版摘要。</div>'}
+      ${detail.transcript ? `<div class="button-row"><button class="button secondary" data-evidence-edit="${esc(recordingId)}">转写时间轴 / 人工校正</button><button class="button secondary" data-analysis-regenerate="${esc(recordingId)}">重新生成可追溯摘要</button></div>` : ""}
+      ${detail.coverage ? `<section class="detail-section"><h3>已保留录制片段</h3><button class="button small secondary" data-partial-transcripts="${esc(recordingId)}">查看中断前已完成的转写</button><p>片段独立保存。换源可能有延迟或重复，回看时按片段选择。</p>${detail.coverage.parts.map((p, i) => `<p>片段 ${i+1} · ${analysisClock(p.offset)} 起 · ${Math.round(p.duration)} 秒 <button class="button small secondary" data-evidence-play="${esc(recordingId)}" data-part-id="${esc(p.id)}" data-start="0">播放</button> <a class="button small secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/parts/${encodeURIComponent(p.id)}/download">下载</a></p>`).join('')}<p>估算缺失时段：${detail.coverage.missing_intervals.map(g => `${analysisClock(g.start)}–${analysisClock(g.end)}`).join('、') || '未检测到明显缺口'}</p></section>` : ""}
       <section class="detail-section"><h3>推送事件</h3>${detail.push_events?.length ? detail.push_events.map(item => `<p>${esc(item.provider)} · ${esc(item.status)} · ${esc(formatDateTime(item.updated_at))}</p>`).join("") : "<p>暂无推送事件</p>"}</section>
     </div>`;
     $("[data-detail-play]")?.addEventListener("click", () => openPlayer(recordingId, row.program_title));
@@ -587,10 +653,10 @@ async function openRecordingDetail(recordingId) {
   await refresh();
 }
 
-async function openPlayer(recordingId, title) {
+async function openPlayer(recordingId, title, startSeconds = 0, partId = null) {
   try {
     const detail = await api(`/api/recordings/${encodeURIComponent(recordingId)}`);
-    if (["queued", "recording"].includes(detail.recording.status)) {
+    if (!partId && ["queued", "recording"].includes(detail.recording.status)) {
       return toast("录像仍在录制或收尾，完成后即可播放。");
     }
   } catch (error) { return toast(error.message, "error"); }
@@ -600,7 +666,11 @@ async function openPlayer(recordingId, title) {
   </div><div class="playback-toolbar"><button class="button small secondary" id="seek-back" type="button">−10 秒</button><label class="speed-control"><span>播放速度</span><select class="select" id="playback-rate"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><button class="button small secondary" id="seek-forward" type="button">+10 秒</button><span class="playback-time" id="playback-time">00:00 / --:--</span></div><div class="modal-actions"><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原始录像</a><button class="button secondary" data-close-modal type="button">关闭</button></div>`, true);
   const video = $("#recording-player");
   const preparing = $("#video-preparing");
-  video.addEventListener("loadedmetadata", () => { preparing.hidden = true; });
+  video.addEventListener("loadedmetadata", () => {
+    preparing.hidden = true;
+    const target = Math.max(0, Number(startSeconds) || 0);
+    video.currentTime = Number.isFinite(video.duration) ? Math.min(target, Math.max(0, video.duration - .1)) : target;
+  });
   video.addEventListener("canplay", () => { preparing.hidden = true; });
   video.addEventListener("error", () => {
     preparing.innerHTML = '<strong>浏览器无法播放该录像</strong><small>可使用下方“下载原始录像”在播放器中打开。</small>';
@@ -619,7 +689,7 @@ async function openPlayer(recordingId, title) {
     video.currentTime = Math.min(Number.isFinite(video.duration) ? video.duration : video.currentTime + 10, video.currentTime + 10);
   });
   $("#playback-rate").addEventListener("change", event => { video.playbackRate = Number(event.currentTarget.value); });
-  video.src = `/api/recordings/${encodeURIComponent(recordingId)}/play`;
+  video.src = partId ? `/api/recordings/${encodeURIComponent(recordingId)}/parts/${encodeURIComponent(partId)}/play` : `/api/recordings/${encodeURIComponent(recordingId)}/play`;
   video.load();
 }
 
@@ -1195,7 +1265,7 @@ async function renderSources() {
           return `<tr>
             <td>${index === 0 ? `<strong>${esc(row.channel_name || channelId)}</strong><small>${esc(channelId)}</small>` : ""}</td>
             <td>${marks.join(" ")}<br><small>${esc(row.label || "")}</small></td>
-            <td><span title="${esc(row.url)}">${esc(host)}</span>${row.last_error ? `<small class="danger">${esc(shorten(row.last_error, 60))}</small>` : ""}</td>
+            <td><span title="${esc(row.url)}">${esc(host)}</span>${row.last_error ? `<small class="danger">${esc(shorten(row.last_error, 60))}</small>` : ""}${row.recording_health ? `<small>录制稳定性 ${row.recording_health.score}% · 最近 ${row.recording_health.attempts} 次</small>` : ''}</td>
             <td><span class="badge">${esc(SOURCE_KIND_LABELS[row.kind] || "线路")}</span></td>
             <td>${row.enabled ? "启用" : "禁用"}</td>
             <td>${esc((streamQualityLabel(row.quality) || "").replace(/^ · /, "") || "—")}</td>

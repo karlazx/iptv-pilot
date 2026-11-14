@@ -37,10 +37,7 @@ def pipeline_status(database, now=None) -> dict:
         "asr": ({"status": "completed", "asr_enabled": {"$ne": False}},
                 {"status": "asr_processing"}, {"status": "asr_failed"},
                 "asr_progress_at", "asr_started_at", "asr_completed_at", "next_asr_attempt_at"),
-        "encoder": ({"encode_status": "pending", "$or": [
-            {"status": {"$in": ["summarized", "asr_failed", "summary_failed"]}},
-            {"status": "asr_done", "llm_enabled": False},
-            {"status": "completed", "asr_enabled": False}]},
+        "encoder": ({"encode_status": "pending", "status": {"$in": ["completed", "asr_processing", "asr_done", "summarizing", "summarized", "asr_failed", "summary_failed"]}},
             {"encode_status": "encoding"}, {"encode_status": "failed"},
             "encode_progress_at", "encode_started_at", "encoded_at", "next_encode_attempt_at"),
         "llm": ({"llm_enabled": {"$ne": False}, "$or": [

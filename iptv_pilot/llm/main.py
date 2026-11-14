@@ -19,12 +19,15 @@ def run_once(database) -> None:
 
     if is_draining(database, "llm"):
         return
+    from iptv_pilot.llm.corrections import repair
     from iptv_pilot.llm.live import final_summary, preview_once
 
+    repair(database)
+
     # Recover a crash between terminal publication and making the push job ready.
-    for saved in database.summaries.find({"ready_for_push": False}).limit(10):
+    for saved in database.summaries.find({"ready_for_push": False, "outdated": {"$ne": True}}).limit(10):
         if database.recordings.find_one({"_id": saved["recording_id"], "summary_state": "done",
-                                         "summary_generation": saved.get("generation")}):
+                                         "summary_generation": saved.get("generation"), "analysis_edit_lease": {"$not": {"$gt": datetime.now(UTC)}}}):
             database.summaries.update_one({"_id": saved["_id"], "generation": saved["generation"]},
                                          {"$set": {"ready_for_push": True, "push_processed": False}})
     now = datetime.now(UTC)
@@ -38,6 +41,7 @@ def run_once(database) -> None:
     recording = database.recordings.find_one_and_update(
         {
             "llm_enabled": {"$ne": False},
+            "analysis_edit_lease": {"$not": {"$gt": now}},
             "$or": [
                 {"status": "asr_done", "summary_state": {"$nin": ["done", "failed", "finalizing"]}, **retry_ready},
                 {"status": {"$in": ["recording", "completed"]}, "asr_state": "done", "live_state": "done",
@@ -90,7 +94,9 @@ def run_once(database) -> None:
             "start_time": recording.get("start_time"),
             **summary,
             "pushed": False,
-            "push_enabled": recording.get("push_enabled", True),
+            "push_claim": None, "push_lease_until": None, "push_retry_count": 0, "next_push_attempt_at": None,
+            "push_enabled": recording.get("push_after_regenerate", False) if recording.get("summary_regeneration") else recording.get("push_enabled", True),
+            "outdated": False,
             # Older push workers understand this flag, so rollback stays safe.
             "push_processed": True,
             "llm_provider": os.getenv("LLM_PROVIDER", "mock"),

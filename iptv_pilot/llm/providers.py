@@ -29,12 +29,19 @@ class OpenAICompatibleProvider(LLMProvider):
         self.model = model
 
     def summarize(self, transcript: str) -> dict:
+        return self._summarize(transcript, SYSTEM_PROMPT)
+
+    def summarize_grounded(self, payload: dict) -> dict:
+        prompt = SYSTEM_PROMPT + "\n输入包含带 id 的原文段落和可选笔记。增加 evidence 数组：每项包含 point_index（要点从0起）、segment_id、quote（原文连续摘录，逐字一致）。每条要点应有1-3条证据。只能引用输入的原文 id，不能把笔记当原文，不能编造证据。没有依据的内容不要写入要点。"
+        return self._summarize(json.dumps(payload, ensure_ascii=False), prompt)
+
+    def _summarize(self, transcript: str, prompt: str) -> dict:
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0.2,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": transcript},
             ],
         )
@@ -51,6 +58,12 @@ class OpenAICompatibleProvider(LLMProvider):
 
 
 class MockProvider(LLMProvider):
+    def summarize_grounded(self, payload: dict) -> dict:
+        source = payload["segments"][0] if payload["segments"] else {"id": "", "text": ""}
+        result = self.summarize(source["text"])
+        result["evidence"] = [{"point_index": 0, "segment_id": source["id"], "quote": source["text"][:120]}]
+        return result
+
     def summarize(self, transcript: str) -> dict:
         preview = transcript.strip().replace("\n", " ")[:120]
         return {

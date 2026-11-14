@@ -7,6 +7,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from iptv_pilot.common.ffmpeg import ffmpeg_environment
+
 
 class MediaError(RuntimeError):
     """Base class for recording media preparation errors."""
@@ -76,6 +78,7 @@ def _run_remux(command: list[str], timeout_seconds: int) -> bool:
             stderr=subprocess.PIPE,
             text=True,
             timeout=max(30, timeout_seconds),
+            env=ffmpeg_environment(command[0]),
         )
     except subprocess.TimeoutExpired:
         return False
