@@ -654,7 +654,7 @@ def process_recording(database, recording: dict) -> None:
         try:
             from iptv_pilot.recorder.partials import save_partial
 
-            save_partial(database, recording, temporary_path, recording.get("capture_started_at", now))
+            save_partial(database, recording, temporary_path, attempt_start[0])
         except Exception:
             logger.warning("could not register partial recording; artifact retained", exc_info=True)
         raise

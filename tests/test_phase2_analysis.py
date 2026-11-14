@@ -147,6 +147,34 @@ def test_terminal_capture_failure_preserves_playable_partial_for_ai(database, vi
     assert saved["asr_state"] == "waiting"
 
 
+def test_failed_fallback_part_uses_its_own_start_time(database, video, tmp_path, monkeypatch):
+    r = row(database, status="recording", source_url="http://example.invalid/live")
+    database.channels.insert_one({"channel_id": r["channel_id"], "enabled": True})
+    clock = [r["start_time"]]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    def interrupted(url, output, end, on_partial):
+        shutil.copy2(video, output)
+        clock[0] += timedelta(seconds=20)
+        on_partial(output, "ffmpeg")
+        shutil.copy2(video, output)
+        raise RuntimeError("fallback also interrupted")
+
+    monkeypatch.setattr(recorder, "datetime", Clock)
+    monkeypatch.setattr(recorder, "RECORDING_ROOT", tmp_path)
+    monkeypatch.setenv("LIVE_ASR_ENABLED", "0")
+    monkeypatch.setattr(recorder, "capture_stream", interrupted)
+    with pytest.raises(RuntimeError, match="fallback also interrupted"):
+        recorder.process_recording(database, r)
+    parts = database.recordings.find_one({"_id": r["_id"]})["recording_parts"]
+    assert [p["offset"] for p in parts] == [0, 20]
+    assert all(Path(p["path"]).exists() for p in parts)
+
+
 def test_stale_worker_recovery_uses_an_immutable_snapshot(database, video):
     r = row(database, status="recording")
     before = video.stat().st_size
