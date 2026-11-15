@@ -26,6 +26,7 @@ const routeMeta = {
 
 const statusMeta = {
   queued: ["等待录制", "info"],
+  cancelled: ["已取消", ""],
   recording: ["录制中", "danger"],
   completed: ["录制完成", "success"],
   asr_processing: ["转写中", "warning"],
@@ -222,16 +223,10 @@ function bookmarkFor(type, itemId) {
 }
 
 async function toggleBookmark(type, itemId) {
-  await loadBookmarks();
-  const existing = bookmarkFor(type, itemId);
-  if (existing) {
-    await api(`/api/bookmarks/${encodeURIComponent(existing._id)}`, { method: "DELETE" });
-    toast("已取消收藏");
-  } else {
-    await api("/api/bookmarks", { method: "POST", body: { user: "default", item_type: type, item_id: itemId, note: "" } });
-    toast("已加入收藏");
-  }
-  await loadBookmarks(true);
+  const existing=await api(`/api/bookmarks/lookup?item_type=${encodeURIComponent(type)}&item_id=${encodeURIComponent(itemId)}`);
+  appState.bookmarks=(appState.bookmarks||[]).filter(m=>!(m.item_type===type&&idOf(m.item_id)===idOf(itemId)));
+  if(existing){await api(`/api/bookmarks/${existing._id}`,{method:'DELETE'});toast('已取消收藏');}
+  else{const mark=await api('/api/bookmarks',{method:'POST',body:{user:'default',item_type:type,item_id:itemId,note:''}});appState.bookmarks.push(mark);toast('已加入收藏');}
 }
 
 function channelOptions(channels, selected = "", allowEmpty = true) {
@@ -356,6 +351,49 @@ async function searchEpg(restore) {
   renderProgramRows(rows, $("#epg-results"), true);
 }
 
+
+function listState(kind) {
+  appState.listPages ||= {};
+  return appState.listPages[kind] ||= { q: '', channel: '', status: '', from: '', to: '', order: 'desc', cursor: '', history: [] };
+}
+async function loadLibrary(kind) {
+  const state = listState(kind), token = appState.renderToken;
+  const params = new URLSearchParams({ limit: 50, order: state.order });
+  for (const key of ['q', 'channel', 'status', 'cursor']) if (state[key]) params.set(key, state[key]);
+  for (const key of ['from', 'to']) if (state[key]) {
+    const date = new Date(`${state[key]}T00:00:00`);
+    if (key === 'to') date.setDate(date.getDate() + 1);
+    params.set(key, date.toISOString());
+  }
+  const page = await api(`/api/library/${kind}?${params}`);
+  if (token !== appState.renderToken) throw new Error('列表请求已过期');
+  if (page.bookmarks) appState.bookmarks = page.bookmarks;
+  return page;
+}
+function libraryControls(kind, page) {
+  const state = listState(kind), dates = ['recordings', 'summaries', 'push-events'].includes(kind);
+  const states = kind === 'recordings' ? Object.entries(statusMeta).map(([k,v]) => [k,v[0]])
+    : ['subscriptions', 'channels', 'sources'].includes(kind) ? [['enabled','启用'],['disabled','停用']] : [];
+  return `<form class="toolbar" id="library-filter"><label class="field grow"><span>检索全部记录</span><input class="input" name="q" maxlength="200" value="${esc(state.q)}" placeholder="关键词、标题或频道"></label>
+    ${['recordings','summaries','sources','subscriptions'].includes(kind) ? `<label class="field"><span>频道</span><input class="input" name="channel" value="${esc(state.channel)}" placeholder="频道 ID"></label>` : ''}
+    ${states.length ? `<label class="field"><span>状态</span><select class="select" name="status"><option value="">全部状态</option>${states.map(([k,v])=>`<option value="${k}" ${state.status===k?'selected':''}>${v}</option>`).join('')}</select></label>` : ''}
+    ${dates ? `<label class="field"><span>从（本地日期）</span><input class="input" type="date" name="from" value="${esc(state.from)}"></label><label class="field"><span>至（含当天）</span><input class="input" type="date" name="to" value="${esc(state.to)}"></label>` : ''}
+    <label class="field"><span>时间顺序</span><select class="select" name="order"><option value="desc" ${state.order==='desc'?'selected':''}>最新在前</option><option value="asc" ${state.order==='asc'?'selected':''}>最早在前</option></select></label>
+    <button class="button secondary" type="submit">筛选</button><button class="button ghost" type="button" data-list-reset>重置</button>
+    <span>本页 ${page.items.length} 项 · 第 ${state.history.length+1} 页</span><button class="button secondary" type="button" data-list-prev ${state.history.length?'':'disabled'}>上一页</button><button class="button secondary" type="button" data-list-next ${page.has_more?'':'disabled'}>下一页</button></form>`;
+}
+function bindLibrary(kind, page) {
+  const form = $('#library-filter'), state = listState(kind);
+  form.onsubmit = event => {
+    event.preventDefault(); const data = new FormData(form);
+    for (const key of ['q','channel','status','from','to','order']) if (data.has(key)) state[key] = String(data.get(key)).trim();
+    state.cursor=''; state.history=[]; renderRoute();
+  };
+  $('[data-list-reset]',form).onclick=()=>{ delete appState.listPages[kind]; renderRoute(); };
+  $('[data-list-next]',form).onclick=()=>{ if(page.next_cursor){state.history.push(state.cursor);state.cursor=page.next_cursor;renderRoute();} };
+  $('[data-list-prev]',form).onclick=()=>{ if(state.history.length){state.cursor=state.history.pop();renderRoute();} };
+}
+
 function subscriptionSummary(subscription) {
   if (subscription.match_type === "keyword") {
     return `${subscription.keyword}${subscription.channel_id ? ` · ${subscription.channel_id}` : " · 全部频道"}`;
@@ -363,17 +401,20 @@ function subscriptionSummary(subscription) {
   const rule = subscription.time_rule || {};
   const configuredWeekdays = rule.weekdays || (rule.weekday === undefined || rule.weekday === null ? [] : [rule.weekday]);
   const weekdays = configuredWeekdays.map(day => "一二三四五六日"[day]).join("、") || "每天";
-  return `${subscription.channel_id} · 周${weekdays} ${rule.time || "任意时间"}`;
+  return `${subscription.channel_id} · 周${weekdays} ${rule.time || "任意时间"} · ${rule.timezone || "Asia/Shanghai"}${subscription.match_type === "channel_schedule" ? ` · ${Math.round(rule.duration_sec/60)} 分钟` : " · 依赖 EPG"}`;
 }
 
 async function renderSubscriptions() {
-  const [subscriptions, channels] = await Promise.all([api("/api/subscriptions"), loadChannels()]);
+  const viewToken=appState.renderToken;
+  const [page, channels] = await Promise.all([loadLibrary("subscriptions"), loadChannels()]);
+  if(viewToken!==appState.renderToken)return;
+  const subscriptions=page.items;
   $("#view").innerHTML = `
     ${pageIntro("管理长期订阅规则。停用不会删除历史录制，可随时重新启用。", '<button class="button" id="new-subscription" type="button">＋ 新建订阅</button>')}
-    <section class="panel"><div class="panel-header"><h2>订阅规则</h2><span class="badge">${subscriptions.length} 条</span></div>
+    ${libraryControls("subscriptions",page)}<section class="panel"><div class="panel-header"><h2>订阅规则</h2><span class="badge">${subscriptions.length} 条</span></div>
       <div class="data-table-wrap">${subscriptions.length ? `<table class="data-table"><thead><tr><th>名称</th><th>匹配规则</th><th>处理能力</th><th>状态</th><th></th></tr></thead><tbody>
         ${subscriptions.map(row => `<tr>
-          <td><strong>${esc(row.name)}</strong><small>${esc(row.match_type === "keyword" ? "关键词" : "频道时间")}</small></td>
+          <td><strong>${esc(row.name)}</strong><small>${esc(row.match_type === "keyword" ? "关键词" : row.match_type === "channel_schedule" ? "独立时段（无需 EPG）" : "EPG 时刻匹配")}</small></td>
           <td>${esc(subscriptionSummary(row))}</td>
           <td><span class="badge ${row.asr_enabled ? "success" : ""}">ASR</span> <span class="badge ${row.llm_enabled ? "success" : ""}">摘要</span> <span class="badge ${row.push_enabled ? "success" : ""}">邮件</span></td>
           <td>${row.enabled ? '<span class="badge success">启用</span>' : '<span class="badge">已停用</span>'}</td>
@@ -396,6 +437,7 @@ async function renderSubscriptions() {
       renderRoute();
     } catch (error) { toast(error.message, "error"); }
   });
+  bindLibrary("subscriptions",page);
   void channels;
 }
 
@@ -408,48 +450,67 @@ async function openSubscriptionForm(existing = null, preset = {}) {
   openModal(existing ? "编辑订阅" : "新建订阅", `
     <form id="subscription-form" class="form-grid">
       <label class="field wide"><span>订阅名称</span><input class="input" name="name" required maxlength="100" value="${esc(value.name || "")}" placeholder="例如：新闻联播"></label>
-      <label class="field"><span>匹配方式</span><select class="select" name="match_type" id="subscription-type"><option value="keyword" ${type === "keyword" ? "selected" : ""}>关键词</option><option value="channel_time" ${type === "channel_time" ? "selected" : ""}>频道时间</option></select></label>
+      <label class="field"><span>匹配方式</span><select class="select" name="match_type" id="subscription-type"><option value="keyword" ${type === "keyword" ? "selected" : ""}>关键词</option><option value="channel_time" ${type === "channel_time" ? "selected" : ""}>EPG 时刻匹配（依赖节目单）</option><option value="channel_schedule" ${type === "channel_schedule" ? "selected" : ""}>独立时段（无需节目单）</option></select></label>
       <label class="field"><span>频道</span><select class="select" name="channel_id" id="subscription-channel">${channelOptions(channels, value.channel_id || "", type === "keyword")}</select></label>
       <label class="field wide keyword-field"><span>节目关键词</span><input class="input" name="keyword" value="${esc(value.keyword || "")}" placeholder="节目标题或简介中的关键词"></label>
       <div class="wide time-fields">
         <div class="form-grid">
           <label class="field"><span>播出时间</span><input class="input" type="time" name="rule_time" value="${esc(value.time_rule?.time || "20:00")}"></label>
-          <label class="field"><span>容差（分钟）</span><input class="input" type="number" name="tolerance_min" min="0" max="180" value="${esc(value.time_rule?.tolerance_min ?? 5)}"></label>
+          <label class="field" data-epg-only><span>容差（分钟）</span><input class="input" type="number" name="tolerance_min" min="0" max="180" value="${esc(value.time_rule?.tolerance_min ?? 5)}"></label>
+          <label class="field"><span>规则时区（IANA）</span><input class="input" name="rule_timezone" value="${esc(value.time_rule?.timezone || 'Asia/Shanghai')}" placeholder="例如 Europe/London"></label>
+          <label class="field" data-schedule-only><span>录制时长（分钟，含节目本身）</span><input class="input" type="number" name="duration_min" min="1" max="720" value="${Number(value.time_rule?.duration_sec || 3600)/60}"></label>
           <div class="field wide"><span>星期</span><div class="checks">${["一","二","三","四","五","六","日"].map((label, day) => `<label class="check"><input type="checkbox" name="weekday" value="${day}" ${weekdays.includes(day) ? "checked" : ""}>周${label}</label>`).join("")}</div></div>
         </div>
       </div>
       <label class="field"><span>ASR 模型</span><select class="select" name="asr_model">${["tiny","base","small","medium"].map(model => `<option ${value.asr_model === model ? "selected" : ""}>${model}</option>`).join("")}</select></label>
       <label class="field"><span>录制缓冲（片尾）</span><select class="select" name="post_roll_seconds">${[["60","1 分钟"],["180","3 分钟（默认）"],["300","5 分钟"],["600","10 分钟"]].map(([sec, label]) => `<option value="${sec}" ${Number(value.post_roll_seconds || 180) === Number(sec) ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <div class="field"><span>自动处理</span><div class="checks"><label class="check"><input type="checkbox" name="asr_enabled" ${value.asr_enabled ? "checked" : ""}>转写</label><label class="check"><input type="checkbox" name="live_asr_enabled" ${value.live_asr_enabled ? "checked" : ""}>录制时转写</label><label class="check"><input type="checkbox" name="llm_enabled" ${value.llm_enabled ? "checked" : ""}>摘要</label><label class="check"><input type="checkbox" name="push_enabled" ${value.push_enabled ? "checked" : ""}>邮件</label><label class="check"><input type="checkbox" name="auto_bookmark" ${value.auto_bookmark ? "checked" : ""}>自动收藏摘要</label></div></div>
-      <div class="modal-actions wide"><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">${existing ? "保存修改" : "创建订阅"}</button></div>
+      <div class="wide" id="subscription-preview"></div><div class="modal-actions wide"><button class="button secondary" type="button" id="preview-subscription">预览未来 7 天</button><button class="button secondary" data-close-modal type="button">取消</button><button class="button" type="submit">${existing ? "保存修改" : "创建订阅"}</button></div>
     </form>`);
   const form = $("#subscription-form");
   const syncFields = () => {
     const keyword = $("#subscription-type").value === "keyword";
     $$(".keyword-field", form).forEach(node => node.hidden = !keyword);
     $$(".time-fields", form).forEach(node => node.hidden = keyword);
-    $("#subscription-channel").required = !keyword;
+    $('#subscription-channel').required = !keyword;
+    $('[name=rule_time]',form).required = !keyword;
+    $('[data-epg-only]',form).hidden = $('#subscription-type').value !== 'channel_time';
+    $('[data-schedule-only]',form).hidden = $('#subscription-type').value !== 'channel_schedule';
+    $('[name=duration_min]',form).disabled = $('#subscription-type').value !== 'channel_schedule';
   };
   $("#subscription-type").addEventListener("change", syncFields);
   syncFields();
-  form.addEventListener("submit", async event => {
-    event.preventDefault();
+  const buildBody = () => {
     const data = new FormData(form);
     const matchType = data.get("match_type");
     const body = {
       name: data.get("name").trim(), match_type: matchType,
       keyword: matchType === "keyword" ? data.get("keyword").trim() : null,
       channel_id: data.get("channel_id") || null,
-      time_rule: matchType === "channel_time" ? {
+      time_rule: matchType !== "keyword" ? {
         weekdays: data.getAll("weekday").map(Number), time: data.get("rule_time"),
-        tolerance_min: Number(data.get("tolerance_min")), timezone: "Asia/Shanghai",
+        tolerance_min: Number(data.get("tolerance_min")), timezone: data.get("rule_timezone").trim(),
+        ...(matchType === "channel_schedule" ? {duration_sec: Math.round(Number(data.get("duration_min"))*60)} : {}),
       } : null,
       asr_enabled: data.has("asr_enabled"), live_asr_enabled: data.has("live_asr_enabled"), asr_model: data.get("asr_model"),
       llm_enabled: data.has("llm_enabled"), push_enabled: data.has("push_enabled"),
       auto_bookmark: data.has("auto_bookmark"), post_roll_seconds: Number(data.get("post_roll_seconds")),
       enabled: existing ? Boolean(existing.enabled) : true,
     };
-    if (matchType === "channel_time" && !body.time_rule.weekdays.length) return toast("频道时间订阅至少选择一个星期", "error");
+    return body;
+  };
+  $('#preview-subscription').onclick = async () => {
+    if (!form.reportValidity()) return;
+    try {
+      const result=await api('/api/subscriptions/preview',{method:'POST',body:buildBody()});
+      const zone=new Intl.DateTimeFormat('zh-CN',{timeZone:result.timezone,dateStyle:'medium',timeStyle:'short'});
+      $('#subscription-preview').innerHTML=`<p>${esc(result.note)}</p><p>规则时区 ${esc(result.timezone)} · 最多显示 10 次</p>${result.items.map(r=>`<p>${esc(r.title)} · ${esc(zone.format(new Date(r.start_time)))} — ${esc(zone.format(new Date(r.end_time)))}<small>本机时间 ${esc(formatDateTime(r.start_time))}</small></p>`).join('')||'<p>未来 7 天没有匹配；独立时段不需要节目单。</p>'}`;
+    } catch(error){toast(error.message,'error');}
+  };
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const body=buildBody();
+    if(body.match_type !== 'keyword' && !body.time_rule.weekdays.length) return toast('请至少选择一个星期','error');
     try {
       await api(existing ? `/api/subscriptions/${existing._id}` : "/api/subscriptions", { method: existing ? "PATCH" : "POST", body });
       toast(existing ? "订阅已更新" : "订阅已创建"); closeModal(); renderRoute();
@@ -458,14 +519,17 @@ async function openSubscriptionForm(existing = null, preset = {}) {
 }
 
 async function renderRecordings() {
-  const [recordings, channels, bookmarks] = await Promise.all([api("/api/recordings?limit=200"), loadChannels(), loadBookmarks()]);
+  const viewToken=appState.renderToken;
+  const [page, channels] = await Promise.all([loadLibrary("recordings"), loadChannels()]);
+  if(viewToken!==appState.renderToken)return;
+  const recordings=page.items;
   const renderToken = appState.renderToken;
   $("#view").innerHTML = `
     ${pageIntro("追踪从排队、录制、转写、摘要到邮件推送的完整处理状态。", '<button class="button" id="manual-recording" type="button">● 手工录制</button>')}
-    <div class="toolbar"><label class="field"><span>状态筛选</span><select class="select" id="recording-filter"><option value="">全部状态</option>${Object.entries(statusMeta).map(([key, meta]) => `<option value="${key}">${meta[0]}</option>`).join("")}</select></label><div class="grow"></div><span class="badge danger" id="recording-live"></span><span class="badge" id="recording-count">${recordings.length} 条</span></div>
+    ${libraryControls("recordings",page)}<div class="meta-row"><span id="recording-live"></span><span id="recording-count"></span></div>
     <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>节目</th><th>时间</th><th>状态</th><th>文件</th><th></th></tr></thead><tbody id="recording-body"></tbody></table></div></section>`;
   const renderRows = () => {
-    const filter = $("#recording-filter").value;
+    const filter = listState("recordings").status;
     const rows = recordings.filter(row => !filter || row.status === filter);
     const running = recordings.filter(row => row.status === "recording").length;
     $("#recording-count").textContent = `${rows.length} 条`;
@@ -475,7 +539,7 @@ async function renderRecordings() {
     $("#recording-body").innerHTML = rows.length ? rows.map(row => {
       const saved = Boolean(bookmarkFor("recording", row._id));
       const playable = Boolean(row.file_path) && !["queued","recording","failed"].includes(row.status);
-      const incomplete = row.partial ? `<span class="badge danger" title="本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒">不完整</span> ` : "";
+      const incomplete = row.partial ? `<span class="badge danger" title="录制不完整；节目头部缺失估算 ${esc(row.missing_head_seconds ?? '未知')} 秒，请查看详情">不完整</span> ` : "";
       const encodeMark = row.encode_status === "done"
         ? `<span class="badge success" title="${esc(formatBytes(row.original_size_bytes))} → ${esc(formatBytes(row.encoded_size_bytes))}">已压缩</span> `
         : row.encode_status === "failed" ? '<span class="badge danger" title="转码失败，仍保留原始 TS">压缩失败</span> '
@@ -490,9 +554,11 @@ async function renderRecordings() {
     appState.recordingRefreshTimer = setTimeout(async () => {
       if (appState.renderToken !== renderToken) return;
       try {
-        const latest = await api("/api/recordings?limit=200");
-        recordings.length = 0;
-        recordings.push(...latest);
+        const ids=recordings.filter(r=>["queued","recording","completed","asr_processing","asr_done","summarizing"].includes(r.status)||["pending","encoding"].includes(r.encode_status)).map(r=>r._id);
+        const latest = await api("/api/recordings/status",{method:"POST",body:{ids}});
+        if(appState.renderToken!==renderToken)return;
+        const updates=new Map(latest.map(r=>[r._id,r]));
+        for(let i=0;i<recordings.length;i++)if(updates.has(recordings[i]._id))recordings[i]={...recordings[i],...updates.get(recordings[i]._id)};
         renderRows();
         scheduleRefresh();
       } catch (_error) {
@@ -502,7 +568,7 @@ async function renderRecordings() {
   };
   renderRows();
   scheduleRefresh();
-  $("#recording-filter").addEventListener("change", renderRows);
+  bindLibrary("recordings",page);
   $("#manual-recording").addEventListener("click", () => openManualRecording(channels));
   $("#recording-body").addEventListener("click", async event => {
     const watch = event.target.closest("[data-watch-channel]");
@@ -639,7 +705,8 @@ async function openRecordingDetail(recordingId) {
     const scroll = $("#modal-body").scrollTop;
     $("#modal-title").textContent = row.program_title || "录制详情";
     $("#modal-body").innerHTML = `<div class="detail-stack">
-      ${row.partial ? `<div class="notice warning">${row.recording_parts?.length ? '本次录制出现中断，已保留可用片段，摘要仅覆盖保留内容。' : `本次录制不完整，缺失开头约 ${esc(row.missed_seconds || 0)} 秒。`}</div>` : ""}
+      ${row.padding_trimmed ? '<div class="notice">已裁剪与相邻订阅重叠的缓冲，保留节目本身的窗口。</div>' : ""}${row.window_conflicts?.length ? `<div class="notice warning">采集窗口冲突：${row.window_conflicts.map(c => `${esc(c.title)} · ${c.reason === 'programme_overlap' ? '节目内容时间重叠' : '前一采集仍在运行'}`).join('；')}。可能排队或缺失。</div>` : ""}${row.schedule_late_seconds ? `<p>相对计划窗口迟开始 ${esc(row.schedule_late_seconds)} 秒；节目头部缺失估算 ${esc(row.missing_head_seconds ?? '未知')} 秒。</p>` : ""}
+      ${row.partial ? `<div class="notice warning">${row.recording_parts?.length ? '本次录制出现中断，已保留可用片段，摘要仅覆盖保留内容。' : `本次录制不完整。节目头部缺失估算 ${esc(row.missing_head_seconds ?? "未知")} 秒；历史计划迟到值不等于实际节目缺失。`}</div>` : ""}
       ${row.epg_time_suspect ? `<div class="notice warning">EPG 时间可能不准，建议加大录制缓冲。</div>` : ""}
       <dl class="definition-grid"><div><dt>频道</dt><dd>${esc(row.channel_id)}</dd></div><div><dt>状态</dt><dd>${badge(row.status)}</dd></div><div><dt>开始时间</dt><dd>${esc(formatDateTime(row.start_time))}</dd></div><div><dt>时长 / 大小</dt><dd>${esc(row.duration_sec || "—")} 秒 · ${esc(formatBytes(row.size_bytes))}</dd></div>${row.encode_status === "done" ? `<div><dt>压缩</dt><dd><span class="badge success">已压缩</span> ${esc(formatBytes(row.original_size_bytes))} → ${esc(formatBytes(row.encoded_size_bytes))}${row.encode_settings?.height ? ` · ${esc(row.encode_settings.height)}p` : ""}</dd></div>` : row.encode_status === "pending" || row.encode_status === "encoding" ? `<div><dt>压缩</dt><dd><span class="badge">${row.encode_status === "encoding" ? "转码中" : "等待转码"}</span></dd></div>` : row.encode_status === "failed" ? `<div><dt>压缩</dt><dd><span class="badge danger">转码失败</span>${row.encode_error ? `<small class="danger">${esc(shorten(row.encode_error, 80))}</small>` : ""}</dd></div>` : ""}</dl>
       <div class="button-row">${row.file_path ? `<button class="button" data-detail-play type="button">▶ 播放</button><a class="button secondary" href="/api/recordings/${encodeURIComponent(recordingId)}/download">下载原文件</a>` : ""}</div>
@@ -895,22 +962,23 @@ function openLivePlayer(channelId, title) {
 }
 
 async function renderSummaries() {
-  await loadBookmarks();
+  const viewToken=appState.renderToken;
+  const page=await loadLibrary("summaries");
+  if(viewToken!==appState.renderToken)return;
   $("#view").innerHTML = `
     ${pageIntro("查看 AI 结构化摘要、核心要点、实体和关联转写。")}
-    <div class="toolbar"><label class="field"><span>日期筛选</span><input class="input" id="summary-date" type="date"></label><button class="button secondary" id="summary-date-button">按日期查看</button><button class="button ghost" id="summary-latest-button">恢复最新</button><div class="grow"></div><span class="badge" id="summary-count">加载中</span></div>
+    ${libraryControls("summaries",page)}<span id="summary-count"></span>
     <div class="card-grid" id="summary-grid"></div>`;
   const load = async date => {
     $("#summary-grid").innerHTML = '<div class="page-loading"><span class="spinner"></span></div>';
-    const rows = await api(date ? `/api/summaries?date=${encodeURIComponent(date)}` : "/api/summaries/latest?limit=100");
+    const rows = page.items;
     $("#summary-count").textContent = `${rows.length} 条`;
     $("#summary-grid").innerHTML = rows.length ? rows.map(row => {
       const saved = Boolean(bookmarkFor("summary", row._id));
       return `<article class="content-card"><div class="meta-row"><span class="badge info">${esc(row.channel_id)}</span><span>${esc(formatDateTime(row.start_time || row.created_at))}</span></div><h3>${esc(row.program_title)}</h3><p>${esc(shorten(row.summary_text, 150))}</p><footer><button class="button small secondary" data-summary-detail="${esc(row._id)}">查看详情</button>${row.recording_id ? `<button class="button small secondary" data-play="${esc(idOf(row.recording_id))}" data-title="${esc(row.program_title)}">播放</button>` : ""}<button class="button small ghost" data-bookmark-summary="${esc(row._id)}">${saved ? "♥ 已收藏" : "♡ 收藏"}</button></footer></article>`;
     }).join("") : emptyState("暂无摘要", date ? "该日期没有节目摘要。" : "完成节目处理后会显示在这里。");
   };
-  $("#summary-date-button").addEventListener("click", () => load($("#summary-date").value).catch(renderError));
-  $("#summary-latest-button").addEventListener("click", () => { $("#summary-date").value = ""; load().catch(renderError); });
+  bindLibrary("summaries",page);
   $("#summary-grid").addEventListener("click", async event => {
     const detail = event.target.closest("[data-summary-detail]");
     const play = event.target.closest("[data-play]");
@@ -918,7 +986,7 @@ async function renderSummaries() {
     if (detail) return openSummaryDetail(detail.dataset.summaryDetail);
     if (play) return openPlayer(play.dataset.play, play.dataset.title);
     if (bookmark) {
-      try { await toggleBookmark("summary", bookmark.dataset.bookmarkSummary); load($("#summary-date").value || null); }
+      try { await toggleBookmark("summary", bookmark.dataset.bookmarkSummary); renderRoute(); }
       catch (error) { toast(error.message, "error"); }
     }
   });
@@ -936,16 +1004,13 @@ async function openSummaryDetail(summaryId) {
 }
 
 async function renderBookmarks() {
-  const bookmarks = await loadBookmarks(true);
-  $("#view").innerHTML = `${pageIntro("收藏节目摘要或录制。录像收藏可直接播放，原始文件也可下载。")}<div class="card-grid" id="bookmark-grid"><div class="page-loading"><span class="spinner"></span></div></div>`;
-  const hydrated = await Promise.all(bookmarks.map(async mark => {
-    try {
-      const item = mark.item_type === "recording"
-        ? await api(`/api/recordings/${idOf(mark.item_id)}`)
-        : await api(`/api/summaries/${idOf(mark.item_id)}`);
-      return { mark, item };
-    } catch (error) { return { mark, error }; }
-  }));
+  const viewToken=appState.renderToken;
+  const page=await loadLibrary("bookmarks");
+  if(viewToken!==appState.renderToken)return;
+  const bookmarks=page.items;
+  $("#view").innerHTML = `${pageIntro("收藏节目摘要或录制。录像收藏可直接播放，原始文件也可下载。")}${libraryControls("bookmarks",page)}<div class="card-grid" id="bookmark-grid"><div class="page-loading"><span class="spinner"></span></div></div>`;
+  bindLibrary("bookmarks",page);
+  const hydrated=bookmarks.map(mark=>({mark,error:!mark.saved_item?new Error('收藏内容已不存在'):null,item:mark.item_type==='recording'?{recording:mark.saved_item}:mark.saved_item}));
   $("#bookmark-grid").innerHTML = hydrated.length ? hydrated.map(({ mark, item, error }) => {
     if (error) return `<article class="content-card"><span class="badge danger">项目不可用</span><h3>失效收藏</h3><p>${esc(error.message)}</p><footer><button class="button small danger" data-remove-bookmark="${esc(mark._id)}">移除</button></footer></article>`;
     const recording = mark.item_type === "recording" ? item.recording : null;
@@ -966,11 +1031,14 @@ async function renderBookmarks() {
 }
 
 async function renderChannelsAdmin() {
-  const channels = await api("/api/channels/admin");
+  const viewToken=appState.renderToken;
+  const page=await loadLibrary("channels");
+  if(viewToken!==appState.renderToken)return;
+  const channels=page.items;
   const categories = ["央视频道", "卫视频道", "国际频道", "地方与其他"];
   $("#view").innerHTML = `
     ${pageIntro("管理频道名称、分类、排序与启用状态。改名/改分类写入 override 字段，不会被次日 EPG 同步覆盖。", '<button class="button" id="admin-new-channel" type="button">＋ 添加频道</button> <button class="button secondary" id="admin-batch-enable" type="button">批量启用</button> <button class="button secondary" id="admin-batch-disable" type="button">批量禁用</button>')}
-    <div class="toolbar"><label class="field"><span>分类筛选</span><select class="select" id="admin-category-filter"><option value="">全部分类</option>${categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label><div class="grow"></div><span class="badge" id="admin-count">${channels.length} 个频道</span></div>
+    ${libraryControls("channels",page)}<div class="toolbar"><label class="field"><span>本页分类</span><select class="select" id="admin-category-filter"><option value="">全部分类</option>${categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label><div class="grow"></div><span class="badge" id="admin-count">${channels.length} 个频道</span></div>
     <section class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" id="admin-check-all" aria-label="全选"></th><th>名称</th><th>分类</th><th>线路</th><th>排序权重</th><th>状态</th><th></th></tr></thead><tbody id="admin-body"></tbody></table></div></section>`;
   const renderRows = () => {
     const filter = $("#admin-category-filter").value;
@@ -995,6 +1063,7 @@ async function renderChannelsAdmin() {
     )}</td></tr>`;
   };
   renderRows();
+  bindLibrary("channels",page);
   $("#admin-category-filter").addEventListener("change", renderRows);
   $("#admin-check-all").addEventListener("change", event => {
     $$(".admin-check").forEach(check => { check.checked = event.target.checked; });
@@ -1197,7 +1266,10 @@ const SOURCE_KIND_LABELS = {
 };
 
 async function renderSources() {
-  const [data, channels] = await Promise.all([api("/api/sources"), loadChannels()]);
+  const viewToken=appState.renderToken;
+  const [page, channels] = await Promise.all([loadLibrary("sources"), loadChannels()]);
+  if(viewToken!==appState.renderToken)return;
+  const data={sources:page.items,unbound:page.items.filter(r=>!r.channel_id)};
   const summary = data.m3u_summary || {};
   const groups = data.groups || [];
   const grouped = new Map();
@@ -1212,10 +1284,7 @@ async function renderSources() {
   const unbound = data.unbound || [];
   $("#view").innerHTML = `
     ${pageIntro("管理直播线路。首选源已锁定，不会被 M3U 同步、质量刷新或规范化服务替换；首选不可用时会自动回退到备用源，恢复后自动切回。", '<button class="button" id="source-new" type="button">＋ 新增备用源</button><button class="button secondary" id="source-import" type="button">导入备用 M3U</button>')}
-    <div class="toolbar">
-      <label class="field grow"><span>筛选频道</span><input class="input" id="source-filter" placeholder="按频道名称或 ID 搜索"></label>
-      <span class="badge" id="source-count">${(data.sources || []).length} 条线路</span>
-    </div>
+    ${libraryControls("sources",page)}<span id="source-count"></span>
     <div class="meta-row" style="margin:0 0 12px"><span>${esc(summary.source || "M3U")} · 最后同步 ${esc(formatDateTime(summary.last_sync_at))} · 内置线路 ${summary.seed_stream_count ?? 0} 条</span></div>
     <div id="source-groups"></div>
     ${unbound.length ? `<section class="panel"><h3>待绑定线路</h3><div class="data-table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>地址</th><th>类型</th><th>绑定频道</th><th></th></tr></thead><tbody>${unbound.map(row => {
@@ -1246,7 +1315,7 @@ async function renderSources() {
     const channelCount = [...byGroup.values()].reduce((total, group) => total + group.channels.length, 0);
     const lineCount = [...byGroup.values()].reduce(
       (total, group) => total + group.channels.reduce((sum, [, rows]) => sum + rows.length, 0), 0);
-    $("#source-count").textContent = `${lineCount} 条线路 · ${channelCount} 个频道 · ${byGroup.size} 个来源`;
+    $("#source-count").textContent = `本页 ${lineCount} 条线路 · ${channelCount} 个频道 · ${byGroup.size} 个来源`;
     $("#source-groups").innerHTML = byGroup.size ? [...byGroup.entries()].map(([key, group]) => {
       const known = groups.find(item => item.key === key);
       return `<section class="panel" style="margin-bottom:16px">
@@ -1286,7 +1355,7 @@ async function renderSources() {
     }).join("") : emptyState("没有匹配的线路", "调整筛选或新增备用源。", true);
   };
   renderGroups();
-  $("#source-filter").addEventListener("input", renderGroups);
+  bindLibrary("sources",page);
   $("#source-new").addEventListener("click", () => openSourceForm(channels));
   $("#source-import").addEventListener("click", () => openImportForm());
   bindSourceDelegation(data.sources || [], channels);
@@ -1454,14 +1523,17 @@ async function testSourceUrl(url, channelId) {
 }
 
 async function renderSystem() {
-  const [status, events, health, buffer, push, encoding] = await Promise.all([
+  const viewToken=appState.renderToken;
+  const [status, eventPage, health, buffer, push, encoding] = await Promise.all([
     api("/api/system/status"),
-    api("/api/push/events?limit=100"),
+    loadLibrary("push-events"),
     api("/health"),
     api("/api/settings/buffer"),
     api("/api/settings/push").catch(() => null),
     api("/api/settings/recording").catch(() => null),
   ]);
+  if(viewToken!==appState.renderToken)return;
+  const events=eventPage.items;
   const recordingTotal = Object.values(status.recordings_by_status || {}).reduce((sum, value) => sum + value, 0);
     const pipelineLabels = { asr: "录后转写", live_asr: "实时转写", encoder: "录像压缩", llm: "节目摘要" };
   const pipelineRows = Object.entries(status.pipeline || {}).map(([name, row]) => `<tr><td>${esc(pipelineLabels[name] || name)}</td><td>${row.pending}${row.retrying ? `（退避 ${row.retrying}）` : ""}</td><td>${row.active}</td><td>${row.blocked || 0}</td><td>${row.failed}</td><td><span class="badge ${row.stalled ? "danger" : "success"}">${row.draining ? "等待维护" : row.stalled ? "进度异常" : "正常"}</span></td><td>${esc(formatDateTime(row.last_success_at))}</td></tr>`).join("");
@@ -1505,7 +1577,7 @@ async function renderSystem() {
         </div></section>
       </div>
       <div class="detail-stack">
-        <section class="panel"><div class="panel-header"><h2>推送事件</h2><span class="badge">${events.length} 条</span></div><div class="data-table-wrap push-event-table"><table class="data-table"><thead><tr><th>通道</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${events.map(row => `<tr><td>${esc(row.provider)}</td><td><span class="badge ${row.status === "delivered" ? "success" : row.status === "failed" ? "danger" : ""}">${esc(row.status)}</span></td><td>${esc(formatDateTime(row.updated_at))}</td></tr>`).join("") || '<tr><td colspan="3">暂无事件</td></tr>'}</tbody></table></div></section>
+        <section class="panel">${libraryControls("push-events",eventPage)}<div class="panel-header"><h2>推送事件</h2><span class="badge">${events.length} 条</span></div><div class="data-table-wrap push-event-table"><table class="data-table"><thead><tr><th>通道</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${events.map(row => `<tr><td>${esc(row.provider)}</td><td><span class="badge ${row.status === "delivered" ? "success" : row.status === "failed" ? "danger" : ""}">${esc(row.status)}</span></td><td>${esc(formatDateTime(row.updated_at))}</td></tr>`).join("") || '<tr><td colspan="3">暂无事件</td></tr>'}</tbody></table></div></section>
         <section class="panel"><div class="panel-header"><h2>直播规范化池</h2><span class="badge">${(status.normalizer_pool?.channels || []).length}/${status.normalizer_pool?.max_concurrency ?? 2} 路</span></div><div class="panel-body">${(status.normalizer_pool?.channels || []).length ? status.normalizer_pool.channels.map(row => `<p class="meta-row"><span class="badge info">手动</span><span>${esc(row.name)}</span><span>${row.healthy === true ? '<span class="badge success">健康</span>' : row.healthy === false ? '<span class="badge danger">异常</span>' : '<span class="badge">未知</span>'}</span><span>${esc(formatDateTime(row.measured_at))}</span></p>`).join("") : '<p class="meta-row">当前无手动指定的规范化频道。</p>'}</div></section>
         <section class="panel"><div class="panel-header"><h2>服务状态</h2></div><div class="panel-body"><p><span class="badge success">API 正常</span></p><p class="meta-row">检查时间：${esc(formatDateTime(health.time))}</p><p class="meta-row">最新摘要：${esc(formatDateTime(status.latest_summary_at))}</p></div></section>
         <section class="panel"><div class="panel-header"><h2>API 访问令牌</h2></div><div class="panel-body"><p class="meta-row">仅在 NAS 开启 WEB_API_TOKEN 后填写，保存在本次浏览器会话中。</p><label class="field"><span>Bearer Token</span><input class="input" id="api-token" type="password" autocomplete="off" value="${esc(sessionStorage.getItem("iptv_api_token") || "")}"></label><div class="button-row" style="margin-top:12px"><button class="button small" id="save-token">保存</button><button class="button small secondary" id="clear-token">清除</button></div></div></section>
@@ -1520,6 +1592,7 @@ async function renderSystem() {
       renderRoute();
     } catch (error) { toast(error.message, "error"); }
   });
+  bindLibrary("push-events",eventPage);
   $("#push-form").addEventListener("submit", async event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -1571,6 +1644,8 @@ async function renderRoute() {
   $("#page-title").textContent = title;
   $("#page-eyebrow").textContent = eyebrow;
   $$(`[data-route]`).forEach(link => link.classList.toggle("active", link.dataset.route === current));
+  clearTimeout(appState.recordingRefreshTimer);
+  const previousView=$("#view"); previousView.replaceWith(previousView.cloneNode(false));
   loading();
   const renderers = { epg: renderEpg, channels: renderChannelsAdmin, sources: renderSources, subscriptions: renderSubscriptions, recordings: renderRecordings, summaries: renderSummaries, bookmarks: renderBookmarks, system: renderSystem };
   try {

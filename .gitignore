@@ -16,6 +16,7 @@ build/
 dist/
 .venv/
 venv/
+node_modules/
 
 # 运行时数据目录（NAS 本地生成，不入库）
 recordings/

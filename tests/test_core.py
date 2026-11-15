@@ -302,7 +302,7 @@ def test_scheduler_dedupes_same_channel_and_start(monkeypatch):
         pass
 
     class Subscriptions:
-        def find(self, _filter):
+        def find(self, _filter, _projection=None):
             return Cursor(
                 [
                     {"_id": "sub-1", "match_type": "keyword", "keyword": "新闻", "enabled": True},
@@ -311,7 +311,7 @@ def test_scheduler_dedupes_same_channel_and_start(monkeypatch):
             )
 
     class Programmes:
-        def find(self, _filter):
+        def find(self, _filter, _projection=None):
             return Cursor(
                 [
                     {
@@ -331,6 +331,9 @@ def test_scheduler_dedupes_same_channel_and_start(monkeypatch):
     class Recordings:
         def __init__(self):
             self.operations = []
+
+        def find(self, _filter, _projection=None):
+            return []
 
         def bulk_write(self, operations, ordered=False):
             self.operations = operations

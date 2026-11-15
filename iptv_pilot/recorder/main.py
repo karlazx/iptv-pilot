@@ -297,8 +297,6 @@ def claim_recording(database, worker_id: str = WORKER_ID):
         sort=[("scheduled_start", 1)],
         return_document=ReturnDocument.AFTER,
     )
-    if recording:
-        _mark_partial_if_late(database, recording, now, claim_id)
     return recording
 
 
@@ -306,16 +304,21 @@ def _mark_partial_if_late(database, recording: dict, now: datetime, claim_id: st
     scheduled_start = recording.get("scheduled_start")
     if not scheduled_start:
         return
-    missed = int((now - scheduled_start).total_seconds())
-    if missed <= 120:
-        return
+    scheduled_late = max(0, int((now-scheduled_start).total_seconds()))
+    starts = [p["started_at"] for p in recording.get("recording_parts", []) if p.get("started_at")]
+    first_capture = min(starts, default=now)
+    missing_head = max(0, int((first_capture-recording.get("start_time", scheduled_start)).total_seconds()))
+    values = {"schedule_late_seconds": scheduled_late, "missing_head_seconds": missing_head,
+              "missed_seconds": scheduled_late,
+              "partial": bool(recording.get("recording_parts") or missing_head > 5)}
     database.recordings.update_one(
         {"_id": recording["_id"], "claim_id": claim_id},
-        {"$set": {"partial": True, "missed_seconds": max(0, missed)}},
+        {"$set": values},
     )
-    recording["partial"] = True
-    recording["missed_seconds"] = max(0, missed)
-    logger.warning("recording claimed late id=%s missed_seconds=%s", recording["_id"], missed)
+    recording.update(values)
+    if scheduled_late > 5:
+        logger.warning("recording starting late id=%s schedule_late_seconds=%s missing_head_seconds=%s",
+                       recording["_id"], scheduled_late, missing_head)
 
 
 def _ffmpeg_executable() -> str:
@@ -507,6 +510,11 @@ def _next_recording_source(database, recording: dict) -> dict | None:
 
 def process_recording(database, recording: dict) -> None:
     claim_id = recording.get("claim_id")
+    subscription_ids = recording.get("subscription_ids") or ([recording["subscription_id"]] if recording.get("subscription_id") else [])
+    if subscription_ids and not database.subscriptions.find_one({"_id": {"$in": subscription_ids}, "enabled": True}, {"_id": 1}):
+        database.recordings.update_one({"_id": recording["_id"], "claim_id": claim_id},
+            {"$set": {"status": "cancelled", "skip_reason": "subscription_disabled", "updated_at": datetime.now(UTC)}})
+        return
     encode_settings = load_encode_settings(database)
     channel = database.channels.find_one({"channel_id": recording["channel_id"], "enabled": True, "disabled": {"$ne": True}})
     if not channel:
@@ -529,6 +537,7 @@ def process_recording(database, recording: dict) -> None:
             {"source_id": source.get("source_id"), "source_url": source["url"], "source_kind": source.get("kind")}
         )
     now = datetime.now(UTC)
+    _mark_partial_if_late(database, recording, now, claim_id)
     recording["timeline_origin"] = recording.get("timeline_origin") or now
     scheduled_end = recording.get("scheduled_end") or recording["end_time"]
     duration = max(1, int((scheduled_end - now).total_seconds()))

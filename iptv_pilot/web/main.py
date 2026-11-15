@@ -80,6 +80,9 @@ async def lifespan(_app: FastAPI):
     from iptv_pilot.llm.traceable import setup as setup_analysis
 
     setup_analysis(database)
+    from iptv_pilot.web.pagination import setup as setup_pagination
+
+    setup_pagination(database)
     live_http_client = httpx.AsyncClient(
         follow_redirects=True,
         timeout=httpx.Timeout(float(os.getenv("LIVE_PROXY_TIMEOUT_SECONDS", "20"))),
@@ -115,6 +118,7 @@ class TimeRule(BaseModel):
     time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     tolerance_min: int = Field(default=0, ge=0, le=180)
     timezone: str = "Asia/Shanghai"
+    duration_sec: int | None = Field(default=None, ge=60, le=43200)
 
     @model_validator(mode="after")
     def validate_weekdays(self):
@@ -129,7 +133,7 @@ class TimeRule(BaseModel):
 
 class SubscriptionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    match_type: Literal["keyword", "channel_time"]
+    match_type: Literal["keyword", "channel_time", "channel_schedule"]
     keyword: str | None = None
     channel_id: str | None = None
     time_rule: TimeRule | None = None
@@ -146,14 +150,18 @@ class SubscriptionCreate(BaseModel):
     def validate_match(self):
         if self.match_type == "keyword" and not (self.keyword or "").strip():
             raise ValueError("关键词不能为空")
-        if self.match_type == "channel_time" and (not self.channel_id or not self.time_rule):
+        if self.match_type in {"channel_time", "channel_schedule"} and (not self.channel_id or not self.time_rule):
             raise ValueError("频道和时间规则不能为空")
+        if self.match_type == "channel_schedule" and (not self.time_rule.time or not self.time_rule.duration_sec):
+            raise ValueError("独立时段录制必须填写开始时刻和持续时长")
+        if self.match_type == "channel_schedule" and self.time_rule.weekdays == []:
+            raise ValueError("请至少选择一个星期")
         return self
 
 
 class SubscriptionUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    match_type: Literal["keyword", "channel_time"] | None = None
+    match_type: Literal["keyword", "channel_time", "channel_schedule"] | None = None
     keyword: str | None = None
     channel_id: str | None = None
     time_rule: TimeRule | None = None
@@ -1237,6 +1245,87 @@ def create_subscription(payload: SubscriptionCreate) -> dict:
 @app.get("/api/subscriptions")
 def subscriptions() -> list[dict]:
     return serialize(list(database.subscriptions.find().sort("created_at", -1)))
+
+
+@app.post("/api/subscriptions/preview")
+def preview_subscription(payload: SubscriptionCreate):
+    from iptv_pilot.scheduler.main import matches
+    from iptv_pilot.scheduler.rules import occurrences
+
+    now = datetime.now(UTC)
+    end = now+timedelta(days=7)
+    if payload.match_type == "channel_schedule":
+        rows = list(occurrences(payload.model_dump(), now, end))[:10]
+    else:
+        query = {"start_time": {"$gte": now, "$lt": end}}
+        if payload.channel_id:
+            query["channel_id"] = payload.channel_id
+        rows = []
+        for programme in database.epg_programs.find(query, {"description": 1, "title": 1, "channel_id": 1, "start_time": 1, "end_time": 1}).sort("start_time", 1):
+            if matches(payload.model_dump(), programme):
+                rows.append(programme)
+                if len(rows) == 10:
+                    break
+    return serialize({"items": rows, "timezone": payload.time_rule.timezone if payload.time_rule else "Asia/Shanghai",
+                      "note": "夏令时跳过的当地时刻不执行，重复时刻仅执行第一次。" if payload.match_type == "channel_schedule" else "EPG 时刻匹配可能匹配多档相邻节目；无节目单请使用独立时段。"})
+
+
+@app.get("/api/library/{kind}")
+def library_page(kind: str, limit: int = Query(50, ge=1, le=100), cursor: str | None = None,
+                 q: str = Query("", max_length=200), channel: str | None = Query(None, max_length=200),
+                 status: str | None = Query(None, max_length=40), first: datetime | None = Query(None, alias="from"),
+                 last: datetime | None = Query(None, alias="to"), order: Literal["asc", "desc"] = "desc"):
+    from iptv_pilot.web.pagination import page
+
+    if any(value is not None and value.tzinfo is None for value in (first, last)) or (first and last and first >= last):
+        raise HTTPException(422, "日期范围须包含时区，且结束时间晚于开始时间")
+    result = page(database, kind, limit=limit, cursor=cursor, q=q, channel=channel, status=status, first=first, last=last, order=order)
+    rows = result["items"]
+    if kind == "channels":
+        counts = {r["_id"]: r["n"] for r in database.sources.aggregate([
+            {"$match": {"channel_id": {"$in": [r["channel_id"] for r in rows]}}},
+            {"$group": {"_id": "$channel_id", "n": {"$sum": 1}}}])}
+        result["items"] = [{**channel_display(r), "stream_count": counts.get(r["channel_id"], 0),
+                             "source_locked": bool(r.get("preferred_source_id")),
+                             "epg_matched": r.get("epg_source") == "xmltv"} for r in rows]
+    elif kind == "sources":
+        channels = list(database.channels.find({"channel_id": {"$in": list({r.get("channel_id") for r in rows})}},
+            {"channel_id": 1, "name": 1, "name_override": 1, "preferred_source_id": 1, "active_source_id": 1, "source_policy": 1}))
+        names, byid = _channel_name_map(channels), {c["channel_id"]: c for c in channels}
+        result["items"] = [{**_public_source(r, names), "group": _source_group(r),
+            "preferred": r["source_id"] == byid.get(r.get("channel_id"), {}).get("preferred_source_id"),
+            "current": r["source_id"] == byid.get(r.get("channel_id"), {}).get("active_source_id")} for r in rows]
+    elif kind == "bookmarks":
+        for typ, coll in (("recording", "recordings"), ("summary", "summaries")):
+            ids = [r["item_id"] for r in rows if r["item_type"] == typ]
+            saved = {r["_id"]: r for r in database[coll].find({"_id": {"$in": ids}},
+                {"program_title": 1, "summary_text": 1, "channel_id": 1, "recording_id": 1, "start_time": 1})}
+            for row in rows:
+                if row["item_type"] == typ:
+                    row["saved_item"] = saved.get(row["item_id"])
+    if kind in {"recordings", "summaries"}:
+        typ = "recording" if kind == "recordings" else "summary"
+        result["bookmarks"] = list(database.bookmarks.find({"user": "default", "item_type": typ,
+            "item_id": {"$in": [r["_id"] for r in rows]}}))
+    return serialize(result)
+
+
+@app.get("/api/bookmarks/lookup")
+def lookup_bookmark(item_type: Literal["recording", "summary"], item_id: str):
+    return serialize(database.bookmarks.find_one({"user": "default", "item_type": item_type, "item_id": object_id(item_id)}))
+
+
+class RecordingStatusLookup(BaseModel):
+    ids: list[str] = Field(max_length=100)
+
+
+@app.post("/api/recordings/status")
+def recording_status_batch(payload: RecordingStatusLookup):
+    return serialize(list(database.recordings.find({"_id": {"$in": [object_id(v) for v in payload.ids]}},
+        {"program_title": 1, "channel_id": 1, "start_time": 1, "status": 1, "file_path": 1, "size_bytes": 1,
+         "partial": 1, "missed_seconds": 1, "schedule_late_seconds": 1, "missing_head_seconds": 1,
+         "padding_trimmed": 1, "window_conflicts": 1, "encode_status": 1, "encoded_size_bytes": 1,
+         "original_size_bytes": 1, "epg_time_suspect": 1})))
 
 
 @app.patch("/api/subscriptions/{subscription_id}")
