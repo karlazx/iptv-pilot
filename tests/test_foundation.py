@@ -142,6 +142,13 @@ def test_pre_roll_lateness_is_not_programme_loss_and_saved_head_survives_retries
     assert r["partial"] and r["missing_head_seconds"] == 0
 
 
+def test_calendar_recording_does_not_claim_epg_timing_is_wrong(monkeypatch, tmp_path):
+    from iptv_pilot.recorder import main as recorder
+
+    monkeypatch.setattr(recorder, "probe_media_duration", lambda *a: pytest.fail("no EPG comparison expected"))
+    assert not recorder._epg_deviation_suspect({"schedule_kind": "channel_schedule"}, tmp_path/"video.ts")
+
+
 def test_cursor_reads_every_row_including_ties_and_rejects_changed_filters(database):
     when = datetime.now(UTC)
     database.recordings.insert_many([{"channel_id": f"c{i}", "program_title": "[literal]", "status": "summarized",

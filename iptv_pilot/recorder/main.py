@@ -361,6 +361,8 @@ def _validate_captured_duration(path: Path, expected_seconds: int) -> float | No
 
 
 def _epg_deviation_suspect(recording: dict, output_path: Path) -> bool:
+    if recording.get("schedule_kind") == "channel_schedule":
+        return False
     """Mark recordings whose real duration deviates >20% from the EPG-expected length."""
     end_time = recording.get("end_time")
     start_time = recording.get("start_time")
