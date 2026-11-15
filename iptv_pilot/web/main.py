@@ -1288,6 +1288,8 @@ def library_page(kind: str, limit: int = Query(50, ge=1, le=100), cursor: str | 
         result["items"] = [{**channel_display(r), "stream_count": counts.get(r["channel_id"], 0),
                              "source_locked": bool(r.get("preferred_source_id")),
                              "epg_matched": r.get("epg_source") == "xmltv"} for r in rows]
+        for row in result["items"]:
+            row.pop("raw_m3u", None)
     elif kind == "sources":
         channels = list(database.channels.find({"channel_id": {"$in": list({r.get("channel_id") for r in rows})}},
             {"channel_id": 1, "name": 1, "name_override": 1, "preferred_source_id": 1, "active_source_id": 1, "source_policy": 1}))
