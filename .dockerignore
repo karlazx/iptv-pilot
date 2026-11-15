@@ -22,3 +22,7 @@ iptv-api-config
 data
 *.log
 .DS_Store
+
+# Local deployment and private project records
+.deploy-history/
+node_modules/

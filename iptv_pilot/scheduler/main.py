@@ -52,80 +52,27 @@ def matches(subscription: dict, programme: dict, timezone_name: str = "Asia/Shan
 
 
 def schedule_once(database) -> None:
+    from iptv_pilot.scheduler.planning import build_plan
+
     now = datetime.now(UTC)
     horizon = now + timedelta(minutes=max(1, int(os.getenv("SCHEDULER_HORIZON_MINUTES", "15"))))
-    subscriptions = list(database.subscriptions.find({"enabled": True}))
-    if not subscriptions:
-        return
-    programmes = list(
-        database.epg_programs.find({"start_time": {"$gte": now, "$lte": horizon}})
-    )
-    enabled_channels = set(database.channels.distinct("channel_id", {"enabled": True, "disabled": {"$ne": True}, "m3u_url": {"$exists": True}}))
-    programmes = [row for row in programmes if row.get("channel_id") in enabled_channels]
-    pre_roll = int(os.getenv("RECORDING_PRE_ROLL_SECONDS", "60"))
-    default_post_roll = int(os.getenv("RECORDING_POST_ROLL_SECONDS", "180"))
-    planned: dict[tuple[str, datetime], dict] = {}
-    for subscription in subscriptions:
-        post_roll = int(subscription.get("post_roll_seconds") or default_post_roll)
-        for programme in programmes:
-            if not matches(subscription, programme, os.getenv("TZ", "Asia/Shanghai")):
-                continue
-            key = (programme["channel_id"], programme["start_time"])
-            existing = planned.get(key)
-            if existing is None:
-                planned[key] = {
-                    "subscription_id": subscription["_id"],
-                    "subscription_ids": [subscription["_id"]],
-                    "channel_id": programme["channel_id"],
-                    "program_title": programme["title"],
-                    "start_time": programme["start_time"],
-                    "end_time": programme["end_time"],
-                    "scheduled_start": programme["start_time"] - timedelta(seconds=pre_roll),
-                    "scheduled_end": programme["end_time"] + timedelta(seconds=post_roll),
-                    # Original window length, used by the recorder to decide
-                    # whether a retry can still capture meaningful content.
-                    "window_seconds": (programme["end_time"] - programme["start_time"]).total_seconds()
-                    + pre_roll
-                    + post_roll,
-                    "status": "queued",
-                    "retry_count": 0,
-                    "created_at": now,
-                    "asr_enabled": subscription.get("asr_enabled", True),
-                    "live_asr_enabled": subscription.get("live_asr_enabled", True),
-                    "asr_model": subscription.get("asr_model", "small"),
-                    "llm_enabled": subscription.get("llm_enabled", True),
-                    "push_enabled": subscription.get("push_enabled", True),
-                    "auto_bookmark": subscription.get("auto_bookmark", False),
-                }
-            elif subscription["_id"] not in existing["subscription_ids"]:
-                existing["subscription_ids"].append(subscription["_id"])
-    operations: list[UpdateOne] = []
-    for (channel_id, start_time), document in planned.items():
-        subscription_ids = document.pop("subscription_ids")
-        operations.append(
-            UpdateOne(
-                {"channel_id": channel_id, "start_time": start_time},
-                {
-                    "$setOnInsert": document,
-                    "$addToSet": {"subscription_ids": {"$each": subscription_ids}},
-                },
-                upsert=True,
-            )
-        )
+    planned, queued = build_plan(database, now, horizon)
+    operations = []
+    for document in planned:
+        ids = document.pop("subscription_ids")
+        operations.append(UpdateOne({"channel_id": document["channel_id"], "start_time": document["start_time"]},
+            {"$setOnInsert": document, "$addToSet": {"subscription_ids": {"$each": ids}}}, upsert=True))
+    for document in queued:
+        values = {k: document[k] for k in ("scheduled_start", "scheduled_end", "window_seconds", "requested_start", "requested_end")}
+        values.update(padding_trimmed=document.get("padding_trimmed", False), window_conflicts=document.get("window_conflicts", []))
+        operations.append(UpdateOne({"_id": document["_id"], "status": "queued"}, {"$set": values}))
     if operations:
         try:
             result = database.recordings.bulk_write(operations, ordered=False)
-        except BulkWriteError as exc:
-            # The legacy unique (subscription_id, start_time) index can reject a
-            # keyword subscription that matches two channels at the same time
-            # until migrate_recorder_concurrency.py has been run.
-            logger.error(
-                "scheduled recordings bulk write failed; run migrate_recorder_concurrency: %s",
-                exc.details.get("writeErrors", exc.details),
-            )
+        except BulkWriteError:
+            logger.exception("schedule write failed; verify recording uniqueness indexes")
             return
         logger.info("scheduled recordings upserted=%s", result.upserted_count)
-
 
 def main() -> None:
     configure_logging()

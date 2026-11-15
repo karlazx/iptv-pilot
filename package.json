@@ -1,0 +1,6 @@
+{
+  "name": "iptv-pilot-web-tests",
+  "private": true,
+  "scripts": {"test:web": "node tests/frontend/library.cjs"},
+  "devDependencies": {"jsdom": "29.1.1"}
+}

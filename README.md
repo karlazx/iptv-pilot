@@ -61,6 +61,9 @@ docker compose ps
 
 ## 文档
 
+- [独立时段录制（无需节目单）](docs/scheduled-recording.md)
+- [列表分页与检索](docs/library.md)
+
 - [录制期间实时转写与增量摘要](docs/live-analysis.md)
 - [第二期：转码解耦、摘要追溯与断流保留](docs/analysis-phase2.md)
 
