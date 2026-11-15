@@ -51,7 +51,7 @@ def page(database, kind, *, limit=50, cursor=None, q="", channel=None, status=No
         query["user"] = "default"
         if q.strip():
             pattern = {"$regex": re.escape(q.strip()), "$options": "i"}
-            query["$or"] += [{f"saved_{typ}.{key}": pattern} for typ in ("recording", "summary")
+            query["$or"] += [{"item_type": typ, f"saved_{typ}.{key}": pattern} for typ in ("recording", "summary")
                               for key in ("program_title", "channel_id")]
     scope = hashlib.sha256(json.dumps([kind, query, order], default=str, sort_keys=True).encode()).hexdigest()[:24]
     direction = -1 if order == "desc" else 1
@@ -82,6 +82,8 @@ def page(database, kind, *, limit=50, cursor=None, q="", channel=None, status=No
             raise HTTPException(400, "分页标记无效或筛选条件已变化，请从第一页开始") from exc
     projection = {"embedding": 0, "segments": 0, "stream_candidates": 0, "stream_quality": 0,
                   "raw_m3u": 0, "live_preview": 0, "recording_parts": 0}
+    if kind == "channels":
+        projection.pop("raw_m3u")  # Derive display category before stripping raw data.
     sort = [(field, direction)] + ([("_id", direction)] if field != "_id" else [])
     if kind in {"bookmarks", "sources"} and q.strip():
         pipeline = []

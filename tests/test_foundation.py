@@ -199,3 +199,23 @@ def test_private_project_area_is_not_tracked_or_sent_as_build_context():
     assert ".deploy-history/" in Path(".dockerignore").read_text(encoding="utf-8")
     if Path(".git").exists():
         assert not subprocess.check_output(["git", "ls-files", ".deploy-history"], text=True).strip()
+
+
+def test_channel_page_preserves_group_category_without_exposing_raw_source(database, monkeypatch):
+    from iptv_pilot.web import main as web
+
+    monkeypatch.setattr(web, "database", database)
+    database.channels.insert_one({"channel_id": "world-feed", "name": "World Feed",
+        "raw_m3u": {"group-title": "国际频道", "url": "http://example.invalid/private"}})
+    result = TestClient(web.app).get("/api/library/channels").json()["items"][0]
+    assert result["category"] == "国际频道" and "raw_m3u" not in result
+
+
+def test_bookmark_search_respects_item_type_when_ids_coincide(database):
+    identity = ObjectId()
+    database.recordings.insert_one({"_id": identity, "program_title": "unrelated", "channel_id": "c",
+                                    "start_time": datetime.now(UTC)})
+    database.summaries.insert_one({"_id": identity, "program_title": "wanted"})
+    database.bookmarks.insert_one({"user": "default", "item_type": "summary", "item_id": identity})
+    assert not page(database, "bookmarks", q="unrelated")["items"]
+    assert len(page(database, "bookmarks", q="wanted")["items"]) == 1
