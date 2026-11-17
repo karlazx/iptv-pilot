@@ -54,7 +54,11 @@ def grounded(provider, segments, notes=None):
 
 def cached_note(database, recording, segments, provider):
     segments = identify(segments)
-    digest = hashlib.sha256(json.dumps([[(s["id"], s["text"]) for s in segments], os.getenv("LLM_PROVIDER", "mock"), os.getenv("LLM_MODEL", ""), "evidence-v1"], ensure_ascii=False).encode()).hexdigest()
+    configuration = [[(s["id"], s["text"]) for s in segments], os.getenv("LLM_PROVIDER", "mock"), os.getenv("LLM_MODEL", ""), "evidence-v1"]
+    # Keep existing cache identities when the optional setting is not used.
+    if effort := getattr(provider, "reasoning_effort", None):
+        configuration.append({"reasoning_effort": effort})
+    digest = hashlib.sha256(json.dumps(configuration, ensure_ascii=False).encode()).hexdigest()
     identity = f"{recording['_id']}:{digest}"
     saved = database.analysis_notes.find_one({"_id": identity})
     if saved:
