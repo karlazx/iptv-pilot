@@ -346,6 +346,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-doubao-seed-1-6-250615}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-}
       ARK_API_KEY: ${ARK_API_KEY:-}
       ARK_BASE_URL: ${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

@@ -89,6 +89,11 @@ Web 服务与其它 worker 共用基础镜像，其中已包含 imageio-ffmpeg�
 
 需要生成真实摘要时，配置任一受支持的 LLM Provider 及其 API Key。OpenAI 兼容的自定义服务使用 `LLM_PROVIDER=custom`、`LLM_BASE_URL`、`LLM_MODEL` 和 `LLM_API_KEY`。
 
+对支持推理强度参数的模型，可设置 `LLM_REASONING_EFFORT=low` 降低摘要请求的推理开销。
+可选值为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，具体支持范围取决于模型与接口；不支持该参数时请留空。留空会完全省略请求参数，保持服务商默认行为。该配置同时作用于实时笔记和正式摘要；修改后重新生成摘要时，分段笔记缓存会区分不同推理强度。
+
+修改 `.env` 后，等待对应服务当前任务结束，再定向重建容器以加载环境变量：compact 模式更新 `background`，split 模式更新 `llm`；仅执行 `restart` 不会读取新的环境值。沿用已有镜像覆盖和 Compose 文件组合，无需重建 ASR、录制器或数据库。已耗尽重试而显示“摘要失败”的任务不会自动恢复，可在录像详情点击“重新生成可追溯摘要”；重新生成默认不再次推送。
+
 向量搜索默认关闭。启用 BGE-M3 需要设置 `INSTALL_EMBEDDING_DEPS=1`，会增加镜像构建时间、模型磁盘占用和运行内存。
 
 通知默认关闭。可在管理台「通用设置 → 推送配置」里选择渠道并填写 SMTP，保存后即时生效；也可继续用环境变量 `PUSH_PROVIDER` / `SMTP_*` 作为初始默认值。

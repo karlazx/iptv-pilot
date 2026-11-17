@@ -20,6 +20,9 @@ class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, api_key: str, base_url: str | None, model: str):
         if not api_key:
             raise RuntimeError("LLM API key is empty")
+        self.reasoning_effort = os.getenv("LLM_REASONING_EFFORT", "").strip().lower() or None
+        if self.reasoning_effort not in {None, "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("LLM_REASONING_EFFORT must be empty, none, minimal, low, medium, high, xhigh or max")
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url or None,
@@ -44,6 +47,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": transcript},
             ],
+            **({"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}),
         )
         content = response.choices[0].message.content or "{}"
         result = json.loads(content)
