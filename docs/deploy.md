@@ -34,6 +34,8 @@ MONGOT_PASSWORD=使用另一个随机长密码
 MONGODB_URI=mongodb://iptv_user:使用随机长密码@mongodb:27017/iptv_pilot?authSource=iptv_pilot&replicaSet=rs0
 ```
 
+当前 `config/mongod-core.conf` 没有设置 `security.authorization`。上面的口令会创建数据库用户并写入应用连接串，但默认不会拒绝同一 Compose 网络内、或能直接路由到容器地址的宿主机进程发出的无口令访问。不要把该口令当成已经生效的访问控制。MongoDB 端口仍然不得发布到宿主机或公网。启用授权还要同时调整初始化、健康检查和副本集连接，这次文档不包含那项改造。
+
 不要将 `.env` 放入备份截图、Issue、群聊或命令输出中，也不要提交到 Git。
 
 ## 3. 配置 IPTV 与 EPG
@@ -155,7 +157,7 @@ docker compose --profile hardware-accel up -d --build
 
 确需远程访问时，优先使用 VPN；也可部署 HTTPS 反向代理并配置 `WEB_API_TOKEN`。启用令牌前，请阅读[安全政策](../.github/SECURITY.md)中关于媒体播放路径的限制。
 
-MongoDB 和 MongoDB Search 端口不得发布到宿主机或公网。
+MongoDB 和 MongoDB Search 端口不得发布到宿主机或公网。不发布端口只取消宿主机端口映射，不会给 Compose 网络本身加上口令。
 
 ## 9. 录制并发
 
